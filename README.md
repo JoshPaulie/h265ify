@@ -97,18 +97,16 @@ The `--crf` value is mapped to each encoder's native quality parameter automatic
 ## Install
 
 >[!Note]
-> This tool will remain unpublished for the foreseeable future, as this is for personal use for myself and friends, but you can install it directly from this repo using `uv`.
+> This tool will remain unpublished for the foreseeable future, as this is for personal use for myself and friends, but you can install it directly from this repo using `uv` (at your own risk).
 
 Requires Python 3.13+ and `ffmpeg` + `ffprobe` on your PATH.
 
 ```bash
-git clone https://github.com/JoshPaulie/h265ify.git
-cd h265ify
-uv tool install .
+uv tool install git+https://github.com/JoshPaulie/h265ify.git
 ```
 
 ### Upgrade
 
 ```bash
-uv tool update h265ify
+uv tool upgrade h265ify
 ```
