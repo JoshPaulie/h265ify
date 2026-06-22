@@ -63,6 +63,51 @@ def _get_available_encoders() -> set[str]:
     return encoders
 
 
+def _validate_encoder(encoder_name: str) -> bool:
+    """Smoke-test a hardware encoder to verify it can actually initialize.
+
+    ffmpeg -encoders can report an encoder as available even when the
+    runtime libraries (e.g. libcuda.so.1) are missing.  This runs a tiny
+    null-output encode (2×2 px, 1 frame) to catch such failures.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=size=2x2:rate=1:duration=0.1",
+                "-frames:v",
+                "1",
+                "-c:v",
+                encoder_name,
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            stderr_tail = result.stderr.strip()
+            if stderr_tail:
+                # Keep only the first relevant line for the log
+                stderr_first_line = stderr_tail.split("\n")[0]
+                logger.warning(
+                    f"encoder {encoder_name} failed validation: {stderr_first_line}"
+                )
+            return False
+        return True
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
 def detect_encoder() -> Encoder:
     """Detect the best available h265 hardware encoder, falling back to libx265.
 
@@ -78,6 +123,12 @@ def detect_encoder() -> Encoder:
                 "hevc_qsv": "Intel QuickSync",
                 "hevc_amf": "AMD AMF",
             }
+            if not _validate_encoder(name):
+                logger.warning(
+                    f"skipping {name} ({labels.get(name, name)}) — "
+                    f"encoder listed but not functional at runtime"
+                )
+                continue
             encoder = Encoder(
                 name=name,
                 is_hardware=True,
