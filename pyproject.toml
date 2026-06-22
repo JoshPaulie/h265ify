@@ -1,0 +1,32 @@
+[project]
+name = "h265ify"
+version = "0.1.0"
+description = "Zero-fuss h265/HEVC video re-encoder wrapper for ffmpeg"
+readme = "README.md"
+authors = [
+    { name = "bex", email = "30572280+JoshPaulie@users.noreply.github.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "rich>=15.0.0",
+    "send2trash>=1.8.3",
+]
+
+[project.scripts]
+h265ify = "h265ify:main"
+hy = "h265ify:main"
+
+[tool.mypy]
+strict = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.1.0",
+    "pytest>=9.0.3",
+    "ruff>=0.15.14",
+    "types-send2trash>=1.8.2.7",
+]
