@@ -1,8 +1,20 @@
 # h265ify (`hy`)
 
-"Zero-fuss" h265/HEVC video re-encoder. Point `hy` at a file or directory and it uses ffmpeg to re-encode everything to h265. Audio and subtitles are preserved; uses hardware acceleration when available.
+```
+ █████       ████████   ████████  ██████████  ███     ██████            
+░░███       ███░░░░███ ███░░░░███░███░░░░░░█ ░░░     ███░░███           
+ ░███████  ░░░    ░███░███   ░░░ ░███     ░  ████   ░███ ░░░  █████ ████
+ ░███░░███    ███████ ░█████████ ░█████████ ░░███  ███████   ░░███ ░███ 
+ ░███ ░███   ███░░░░  ░███░░░░███░░░░░░░░███ ░███ ░░░███░     ░███ ░███ 
+ ░███ ░███  ███      █░███   ░███ ███   ░███ ░███   ░███      ░███ ░███ 
+ ████ █████░██████████░░████████ ░░████████  █████  █████     ░░███████ 
+░░░░ ░░░░░ ░░░░░░░░░░  ░░░░░░░░   ░░░░░░░░  ░░░░░  ░░░░░       ░░░░░███ 
+                                                               ███ ░███ 
+                                  yet another ffmpeg wrapper   ░░██████  
+                                                               ░░░░░░
+```
 
-The goal: a simple ffmpeg wrapper that abstracts away the complex CLI and just provides (what I'd consider to be) sane defaults for my friends.
+"Zero-fuss" h265/HEVC video re-encoder, powered by ffmpeg <3
 
 > [!warning]
 > Written by DSv4. Personal use only :) No support, no responsibility.
@@ -16,10 +28,10 @@ The goal: a simple ffmpeg wrapper that abstracts away the complex CLI and just p
 hy video.mkv              # → video_h265.mkv (suffixed alongside original)
 hy ~/Videos/              # walk directory recursively, re-encode all videos
 
-hy --yolo video.mp4       # re-encode and replace original immediately
-hy --replace ~/Videos/    # replace originals with existing _h265 copies (no encoding)
-hy --dry-run ~/Movies/    # preview what would happen
-hy --crf 20 video.mkv     # higher quality (lower = better, default: 23)
+hy --yolo video.mp4         # re-encode and replace original immediately
+hy --replace ~/Videos/      # replace originals with existing _h265 copies (no encoding)
+hy --dry-run ~/Movies/      # preview what would happen
+hy --crf 20 video.mkv       # higher quality (lower = better, default: 23)
 hy --resize 720p video.mkv  # shrink to 720p, preserving aspect ratio
 
 hy --preset fast video.mkv    # faster encoding, slightly larger file
