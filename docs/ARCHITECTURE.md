@@ -140,6 +140,7 @@ src/h265ify/
   __init__.py    CLI entry point, argparse, orchestration
   encoder.py     ffmpeg command builder, subprocess runner
   hardware.py    encoder detection, preset/quality mappings
+  logger.py      persistent file logging (app events + ffmpeg stderr)
   pipeline.py    file discovery, job prep, encode loop, replace mode
   probe.py       ffprobe wrapper, metadata extraction
 ```
