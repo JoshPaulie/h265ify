@@ -62,6 +62,11 @@ Output is mp4 by default. Files already in mp4, mkv, or mov keep their original 
 | `--format`         |       | Force output container: `mp4`, `mkv`, or `mov`. Default: preserve mp4/mkv/mov, convert everything else to mp4. |
 | `--reencode-audio` |       | Re-encode audio (AAC for MP4/MOV, Opus for MKV) instead of stream-copy. |
 
+> [!NOTE]
+> Lowering `--crf` too far can actually *increase* file size.
+> If the output ends up larger than the input, `h265ify` skips it automatically.
+> See [docs/flags.md](docs/flags.md#crf) for details.
+
 ### Output / safety
 
 | Flag                 | Short | Description |

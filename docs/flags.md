@@ -14,6 +14,10 @@ Files or directories to process. Directories are walked recursively, picking up 
 
 Quality control, 0 to 51. Lower numbers mean better quality and bigger files. Default is 23, a sensible starting point for most content. Hardware encoders get an equivalent quality mapping, so the same CRF value works across all encoders (though results won't be pixel-identical).
 
+Lowering CRF too far can backfire. At very low values (roughly below 15), the encoder preserves so much detail — including noise and compression artifacts already in the original — that the output can actually grow *larger* than the input. At CRF 0 the encoder runs in lossless mode, which almost always balloons file size well beyond the original.
+
+h265ify catches this automatically: if an encode produces an output larger than the input, the temp file is deleted and the original is left untouched. The file is reported as skipped in the summary. If you'd rather halt the whole batch when this happens, use [`--halt-on-increase`](#halt-on-increase--h).
+
 ### `--preset`
 
 Speed-vs-compression tradeoff. `medium` is the default. Slower presets (`slow`, `veryslow`) squeeze out smaller files; faster ones (`fast`, `ultrafast`) finish quicker but leave files larger. The preset names match libx265's conventions and are translated to each hardware encoder's native equivalents automatically.
