@@ -45,23 +45,40 @@ Output is mp4 by default. Files already in mp4, mkv, or mov keep their original 
 
 ## Flags
 
-| Flag                | Short        | Description |
-| ------------------- | ------------ | ----------- |
-| `paths`             | (positional) | Video files or directories. Directories are walked recursively. |
-| `--crf`             |              | Quality, 0–51. Lower = better. Default 23. Mapped to native scale for hardware encoders. |
-| `--preset`          |              | Speed/efficiency: `ultrafast` … `veryslow`. Default `medium`. Faster = bigger file, slower = smaller. Mapped to hardware equivalents. |
-| `--tune`            |              | Content tuning: `animation`, `grain`, `stillimage`, `fastdecode`, `zerolatency`. libx265 only. |
-| `--cpu`             |              | Force software encoding (libx265). Slower but better compression than hardware. |
-| `--resize`          | `-r`         | Shrink output: `720p`, `1080p`, `4k`, or exact `1280x720`. Maintains aspect ratio. |
-| `--no-upscale`      |              | With `--resize`: skip files already ≤ target resolution. |
-| `--format`          |              | Force output container: `mp4`, `mkv`, or `mov`. Default: preserve mp4/mkv/mov, convert everything else to mp4. |
-| `--reencode-audio`  |              | Re-encode audio (AAC for MP4/MOV, Opus for MKV) instead of stream-copy. |
-| `--yolo`            | `-y`         | Encode and replace the original immediately. Temp file used — original untouched until encode succeeds. |
-| `--replace`         |              | No encoding. Find existing `_h265` files and swap them in place of originals. |
-| `--dry-run`         |              | Preview what would happen. No encoding, no replacing. |
-| `--permanent`       |              | Permanently delete replaced originals. Default: move to system trash. |
-| `--halt-on-increase` | `-H`        | Stop the entire batch if any output is larger than the original. |
-| `--version`         |              | Print version and exit. |
+### Positional
+
+| Flag     | Short        | Description |
+| -------- | ------------ | ----------- |
+| `paths`  | (positional) | Video files or directories. Directories are walked recursively. |
+
+### Encoding
+
+| Flag               | Short | Description |
+| ------------------ | ----- | ----------- |
+| `--crf`            |       | Quality, 0–51. Lower = better. Default 23. Mapped to native scale for hardware encoders. |
+| `--preset`         |       | Speed/efficiency: `ultrafast` … `veryslow`. Default `medium`. Faster = bigger file, slower = smaller. Mapped to hardware equivalents. |
+| `--tune`           |       | Content tuning: `animation`, `grain`, `stillimage`, `fastdecode`, `zerolatency`. libx265 only. |
+| `--cpu`            |       | Force software encoding (libx265). Slower but better compression than hardware. |
+| `--resize`         | `-r`  | Shrink output: `720p`, `1080p`, `4k`, or exact `1280x720`. Maintains aspect ratio. |
+| `--no-upscale`     |       | With `--resize`: skip files already ≤ target resolution. |
+| `--format`         |       | Force output container: `mp4`, `mkv`, or `mov`. Default: preserve mp4/mkv/mov, convert everything else to mp4. |
+| `--reencode-audio` |       | Re-encode audio (AAC for MP4/MOV, Opus for MKV) instead of stream-copy. |
+
+### Output / safety
+
+| Flag                 | Short | Description |
+| -------------------- | ----- | ----------- |
+| `--yolo`             | `-y`  | Encode and replace the original immediately. Temp file used — original untouched until encode succeeds. |
+| `--replace`          |       | No encoding. Find existing `_h265` files and swap them in place of originals. |
+| `--dry-run`          |       | Preview what would happen. No encoding, no replacing. |
+| `--permanent`        |       | Permanently delete replaced originals. Default: move to system trash. |
+| `--halt-on-increase` | `-H`  | Stop the entire batch if any output is larger than the original. |
+
+### Meta
+
+| Flag        | Short | Description |
+| ----------- | ----- | ----------- |
+| `--version` |       | Print version and exit. |
 
 ## Preset mapping
 
