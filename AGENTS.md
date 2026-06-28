@@ -119,11 +119,6 @@ These modes are mutually exclusive. Passing both `--replace` and `--yolo` is an 
 - Mapped to each hardware encoder's native presets (see README for the full table).
 - VideoToolbox ignores `--preset` (always max quality).
 
-### `--tune` content tuning
-
-- Accepts x265 tune values: `animation`, `grain`, `stillimage`, `fastdecode`, `zerolatency`.
-- Only applied for libx265. A warning is printed if used with a hardware encoder.
-
 ### Audio handling
 
 - **Default**: stream-copy all audio tracks (`-c:a copy`).

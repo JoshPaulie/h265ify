@@ -35,7 +35,6 @@ hy --crf 20 video.mkv       # higher quality (lower = better, default: 23)
 hy --resize 720p video.mkv  # shrink to 720p, preserving aspect ratio
 
 hy --preset fast video.mkv    # faster encoding, slightly larger file
-hy --tune animation anime.mkv # optimize for animation (libx265 only)
 hy --cpu video.mkv            # force CPU encoding for better compression
 ```
 
@@ -57,7 +56,6 @@ Output is mp4 by default. Files already in mp4, mkv, or mov keep their original 
 | ------------------ | ----- | ----------- |
 | `--crf`            |       | Quality, 0–51. Lower = better. Default 23. Mapped to native scale for hardware encoders. |
 | `--preset`         |       | Speed/efficiency: `ultrafast` … `veryslow`. Default `medium`. Faster = bigger file, slower = smaller. Mapped to hardware equivalents. |
-| `--tune`           |       | Content tuning: `animation`, `grain`, `stillimage`, `fastdecode`, `zerolatency`. libx265 only. |
 | `--cpu`            |       | Force software encoding (libx265). Slower but better compression than hardware. |
 | `--resize`         | `-r`  | Shrink output: `720p`, `1080p`, `4k`, or exact `1280x720`. Maintains aspect ratio. |
 | `--no-upscale`     |       | With `--resize`: skip files already ≤ target resolution. |

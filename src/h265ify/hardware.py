@@ -167,9 +167,6 @@ _PRESET_CHOICES = [
     "veryslow",
 ]
 
-# Tune values (libx265 only; hardware encoders ignore tune)
-_TUNE_CHOICES = ["animation", "grain", "stillimage", "fastdecode", "zerolatency"]
-
 # Map canonical x265 preset names → NVENC presets (p1=fastest, p7=slowest)
 _NVENC_PRESET_MAP: dict[str, str] = {
     "ultrafast": "p1",
@@ -214,7 +211,6 @@ def encoder_quality_flags(
     encoder_name: str,
     crf: int,
     preset: str | None = None,
-    tune: str | None = None,
 ) -> list[str]:
     """Return encoder-specific quality flags for a given CRF value.
 
@@ -222,15 +218,13 @@ def encoder_quality_flags(
     native quality parameter. The goal is roughly equivalent visual quality
     across encoders at the same CRF value.
 
-    Preset/tune follow x265 naming. Tune is libx265-only; hardware encoders ignore it.
+    Preset follows x265 naming.
     """
     if preset is None:
         preset = "medium"
 
     if encoder_name == "libx265":
         flags = ["-crf", str(crf), "-preset", preset]
-        if tune:
-            flags.extend(["-tune", tune])
         return flags
 
     if encoder_name == "hevc_videotoolbox":

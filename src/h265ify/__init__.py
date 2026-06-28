@@ -61,7 +61,6 @@ examples:
   h265ify --replace ~/Videos/      replace originals with _h265 copies (no encoding)
   h265ify --dry-run ~/Movies/      preview what would be encoded
   h265ify --preset fast video.mkv  faster encoding, slightly larger file
-  h265ify --tune animation anime.mkv  optimize for animation
   h265ify --cpu video.mkv          force software encoding (libx265)
 """,
     )
@@ -141,11 +140,6 @@ examples:
         "Mapped to hardware encoder equivalents where applicable.",
     )
     advanced.add_argument(
-        "--tune",
-        choices=["animation", "grain", "stillimage", "fastdecode", "zerolatency"],
-        help="tuning profile for specific content types (libx265 only)",
-    )
-    advanced.add_argument(
         "--cpu",
         action="store_true",
         help="use CPU encoding (libx265) instead of hardware acceleration",
@@ -200,8 +194,6 @@ examples:
             ignored.append("--resize")
         if args.preset != "medium":
             ignored.append("--preset")
-        if args.tune:
-            ignored.append("--tune")
         if args.reencode_audio:
             ignored.append("--reencode-audio")
         if args.output_format:
@@ -292,7 +284,6 @@ def _cmd_encode(args: argparse.Namespace, console: Console) -> None:
 
     logger.info(
         f"encoder={encoder.name}  crf={args.crf}  preset={args.preset}"
-        + (f"  tune={args.tune}" if args.tune else "")
         + (f"  resize={args.resize}" if args.resize else "")
         + ("  yolo" if args.yolo else "")
         + ("  reencode-audio" if args.reencode_audio else "")
@@ -300,12 +291,6 @@ def _cmd_encode(args: argparse.Namespace, console: Console) -> None:
     parts = [f"[bold green]{encoder.label}[/]{hw_note}"]
     parts.append(f"CRF [green]{args.crf}[/]")
     parts.append(f"preset [green]{args.preset}[/]")
-    if args.tune:
-        parts.append(f"tune [cyan]{args.tune}[/]")
-        if encoder.is_hardware:
-            console.print(
-                f"  [yellow]note:[/] --tune is ignored by {encoder.label} (libx265 only)"
-            )
     if args.resize:
         parts.append(f"resize [cyan]{args.resize}[/]")
     console.print(" ".join(parts))
@@ -439,7 +424,6 @@ def _cmd_encode(args: argparse.Namespace, console: Console) -> None:
         output_format=args.output_format,
         permanent=args.permanent,
         preset=args.preset,
-        tune=args.tune,
         resize=args.resize,
         no_upscale=args.no_upscale,
         reencode_audio=args.reencode_audio,

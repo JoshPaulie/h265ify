@@ -90,7 +90,6 @@ def build_command(
     resize: str | None = None,
     no_upscale: bool = False,
     preset: str | None = None,
-    tune: str | None = None,
     warnings: list[str] | None = None,
 ) -> list[str]:
     """Build the ffmpeg command for re-encoding a single file to h265.
@@ -116,7 +115,7 @@ def build_command(
     # --- Video ---
     cmd.extend(["-map", "0:V"])
     cmd.extend(["-c:v", encoder.name])
-    cmd.extend(encoder_quality_flags(encoder.name, crf, preset=preset, tune=tune))
+    cmd.extend(encoder_quality_flags(encoder.name, crf, preset=preset))
 
     # hvc1 tag (QuickTime compatibility - for MP4/MOV)
     if is_mp4_based:
