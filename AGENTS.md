@@ -19,6 +19,7 @@ src/h265ify/
   __init__.py     entry point, argparse CLI, main()
   encoder.py      ffmpeg command builder, subprocess runner, size/duration formatting
   hardware.py     hardware encoder detection (VT/NVENC/QSV/AMF → libx265 fallback)
+  logger.py       persistent file logging (app events + ffmpeg stderr)
   pipeline.py     file discovery, job preparation, sequential encoding, summary
   probe.py        ffprobe wrapper, codec/HDR/stream metadata extraction
 pyproject.toml
@@ -37,6 +38,9 @@ justfile         aliases: check, format, lint, mypy
 ---
 
 ## Design Decisions
+
+> For the complete flags reference and preset mapping tables, see [README.md](README.md).
+> This section documents the *why* behind each design choice.
 
 ### Modes of operation
 
@@ -112,20 +116,7 @@ These modes are mutually exclusive. Passing both `--replace` and `--yolo` is an 
 ### `--preset` speed/efficiency
 
 - Accepts standard x265 preset names (`ultrafast` through `veryslow`, default `medium`).
-- Mapped to each hardware encoder's native presets:
-
-| x265 preset          | libx265   | NVENC | QSV      | AMF      |
-| -------------------- | --------- | ----- | -------- | -------- |
-| ultrafast            | ultrafast | p1    | veryfast | speed    |
-| superfast            | superfast | p1    | veryfast | speed    |
-| veryfast             | veryfast  | p2    | faster   | balanced |
-| faster               | faster    | p3    | fast     | balanced |
-| fast                 | fast      | p4    | medium   | balanced |
-| **medium** (default) | medium    | p4    | slow     | quality  |
-| slow                 | slow      | p6    | veryslow | quality  |
-| slower               | slower    | p7    | veryslow | quality  |
-| veryslow             | veryslow  | p7    | veryslow | quality  |
-
+- Mapped to each hardware encoder's native presets (see README for the full table).
 - VideoToolbox ignores `--preset` (always max quality).
 
 ### `--tune` content tuning
@@ -137,13 +128,13 @@ These modes are mutually exclusive. Passing both `--replace` and `--yolo` is an 
 
 - **Default**: stream-copy all audio tracks (`-c:a copy`).
 - `--reencode-audio` flag re-encodes audio:
-  - MP4 output → AAC @ 192k
+  - MP4/MOV output → AAC @ 192k
   - MKV output → Opus @ 128k
 
 ### Subtitle handling
 
 - **Default**: preserve all subtitles.
-  - MP4 output: convert text-based subs to `mov_text`, warn about dropped bitmap subs.
+  - MP4/MOV output: convert text-based subs to `mov_text`, warn about dropped bitmap subs.
   - MKV output: stream-copy all subs as-is (no conversion, no loss).
 - Dropped bitmap subtitles in MP4 mode produce warnings per file.
 
@@ -171,25 +162,6 @@ These modes are mutually exclusive. Passing both `--replace` and `--yolo` is an 
 
 - Final summary shows: files encoded, skipped, failed, total time, aggregate size reduction.
 - Per-file results printed inline as each job completes.
-
-### CLI flags reference
-
-| Flag               | Short        | Description                                                             |
-| ------------------ | ------------ | ----------------------------------------------------------------------- |
-| `paths`            | (positional) | Video files or directories to process                                   |
-| `--crf`            |              | Quality: 0–51, default 23                                               |
-| `--resize`         | `-r`         | Resize output: `720p`, `1080p`, `4k`, `WxH`                             |
-| `--no-upscale`     |              | Don't upscale if input ≤ target                                         |
-| `--yolo`           | `-y`         | Replace original during encode (risky)                                  |
-| `--permanent`      |              | Permanently delete replaced originals instead of sending to trash       |
-| `--replace`        |              | Batch-replace originals with existing `_h265` files (no encoding)       |
-| `--format`         |              | Force output container: `mp4` or `mkv`                                  |
-| `--reencode-audio` |              | Re-encode audio instead of stream-copy                                  |
-| `--preset`         |              | Encoding speed/efficiency: `ultrafast` … `veryslow` (default `medium`)  |
-| `--tune`           |              | Tuning profile: `animation`, `grain`, `stillimage`, etc. (libx265 only) |
-| `--cpu`            |              | Force CPU encoding (libx265) instead of hardware acceleration            |
-| `--dry-run`        |              | Preview without encoding/replacing                                      |
-| `--version`        |              | Print version and exit                                                  |
 
 ### Deferred to v2
 
