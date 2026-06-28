@@ -183,7 +183,7 @@ class TestBuildCommandMP4:
         assert _has_flag(cmd, "-look_ahead")
         assert _has_flag(cmd, "-preset") and _flag_value(cmd, "-preset") == "slow"
 
-    def test_preset_and_tune_passed_through(self) -> None:
+    def test_preset_passed_through(self) -> None:
         encoder = Encoder(name="libx265", is_hardware=False, label="CPU")
         cmd = build_command(
             Path("/tmp/v.mkv"),
@@ -192,10 +192,8 @@ class TestBuildCommandMP4:
             encoder,
             crf=20,
             preset="fast",
-            tune="animation",
         )
         assert _has_flag(cmd, "-preset") and _flag_value(cmd, "-preset") == "fast"
-        assert _has_flag(cmd, "-tune") and _flag_value(cmd, "-tune") == "animation"
 
     def test_amf_cqp_mp4(self) -> None:
         encoder = Encoder(name="hevc_amf", is_hardware=True, label="AMF")

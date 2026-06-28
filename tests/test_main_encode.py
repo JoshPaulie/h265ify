@@ -16,7 +16,6 @@ def test_cmd_encode_no_probe_results() -> None:
         cpu=True,
         crf=23,
         preset="medium",
-        tune=None,
         resize=None,
         yolo=False,
         dry_run=False,
@@ -45,7 +44,6 @@ def test_cmd_encode_no_jobs_skipped() -> None:
         cpu=True,
         crf=23,
         preset="medium",
-        tune=None,
         resize=None,
         yolo=False,
         dry_run=False,
@@ -76,7 +74,6 @@ def test_cmd_encode_no_jobs_skipped_not_h265() -> None:
         cpu=True,
         crf=23,
         preset="medium",
-        tune=None,
         resize=None,
         yolo=False,
         dry_run=False,
@@ -107,7 +104,6 @@ def test_cmd_encode_success() -> None:
         cpu=True,
         crf=23,
         preset="medium",
-        tune="animation",
         resize="720p",
         yolo=True,
         dry_run=False,
@@ -154,7 +150,6 @@ def test_cmd_encode_success_with_skipped() -> None:
         cpu=True,
         crf=23,
         preset="medium",
-        tune=None,
         resize=None,
         yolo=False,
         dry_run=False,
@@ -207,7 +202,6 @@ def test_cmd_encode_yolo_permanent_abort() -> None:
         cpu=True,
         crf=23,
         preset="medium",
-        tune=None,
         resize=None,
         yolo=True,
         dry_run=False,
@@ -232,7 +226,6 @@ def test_cmd_encode_yolo_no_permanent() -> None:
         cpu=True,
         crf=23,
         preset="medium",
-        tune=None,
         resize=None,
         yolo=True,
         dry_run=False,
@@ -260,7 +253,6 @@ def test_cmd_encode_job_complete_callback() -> None:
         cpu=True,
         crf=23,
         preset="medium",
-        tune=None,
         resize=None,
         yolo=False,
         dry_run=False,
@@ -343,7 +335,6 @@ def test_cmd_encode_fallback_cpu_warning() -> None:
         cpu=False,
         crf=23,
         preset="medium",
-        tune="animation",
         resize="720p",
         yolo=False,
         dry_run=False,
@@ -363,40 +354,6 @@ def test_cmd_encode_fallback_cpu_warning() -> None:
             assert e.value.code == 0
 
 
-def test_cmd_encode_hardware_tune_warning() -> None:
-    console = MagicMock()
-    console.get_time = lambda: 1.0
-    console.width = 80
-    console.get_time = lambda: 1.0
-    console.width = 80
-    args = MagicMock(
-        cpu=False,
-        crf=23,
-        preset="medium",
-        tune="animation",
-        resize="720p",
-        yolo=False,
-        dry_run=False,
-        permanent=False,
-        paths=[Path(".")],
-        output_format=None,
-        reencode_audio=False,
-    )
-    with patch("h265ify.find_video_files", return_value=[]):
-        from h265ify.hardware import Encoder
-
-        with patch(
-            "h265ify.detect_encoder",
-            return_value=Encoder("hevc_videotoolbox", True, "VT"),
-        ):
-            with pytest.raises(SystemExit) as e:
-                _cmd_encode(args, console)
-            assert e.value.code == 0
-            console.print.assert_any_call(
-                "  [yellow]note:[/] --tune is ignored by VT (libx265 only)"
-            )
-
-
 def test_cmd_encode_nothing_to_do() -> None:
     console = MagicMock()
     console.get_time = lambda: 1.0
@@ -407,7 +364,6 @@ def test_cmd_encode_nothing_to_do() -> None:
         cpu=True,
         crf=23,
         preset="medium",
-        tune=None,
         resize=None,
         yolo=False,
         dry_run=False,
@@ -436,7 +392,6 @@ def test_cmd_encode_success_with_skipped_not_h265() -> None:
         cpu=True,
         crf=23,
         preset="medium",
-        tune=None,
         resize=None,
         yolo=False,
         dry_run=False,
@@ -492,7 +447,6 @@ def test_cmd_encode_interrupted() -> None:
         cpu=True,
         crf=23,
         preset="medium",
-        tune=None,
         resize=None,
         yolo=False,
         dry_run=False,
@@ -525,7 +479,6 @@ def test_cmd_encode_failure() -> None:
         cpu=True,
         crf=23,
         preset="medium",
-        tune=None,
         resize=None,
         yolo=False,
         dry_run=False,

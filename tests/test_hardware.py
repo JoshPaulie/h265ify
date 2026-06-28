@@ -100,16 +100,6 @@ class TestEncoderQualityFlags:
         assert flags[5] == "0"  # qp_p
 
     # -- Preset mapping (non-default) --
-    def test_libx265_custom_preset_and_tune(self) -> None:
-        flags = encoder_quality_flags(
-            "libx265", crf=23, preset="fast", tune="animation"
-        )
-        assert flags == ["-crf", "23", "-preset", "fast", "-tune", "animation"]
-
-    def test_libx265_tune_only_no_preset(self) -> None:
-        flags = encoder_quality_flags("libx265", crf=23, tune="grain")
-        assert flags == ["-crf", "23", "-preset", "medium", "-tune", "grain"]
-
     def test_nvenc_custom_preset(self) -> None:
         flags = encoder_quality_flags("hevc_nvenc", crf=23, preset="veryslow")
         assert flags == ["-rc", "vbr", "-cq", "23", "-preset", "p7"]
@@ -122,10 +112,6 @@ class TestEncoderQualityFlags:
         flags = encoder_quality_flags("hevc_amf", crf=23, preset="ultrafast")
         # ultrafast → speed
         assert "speed" in flags
-
-    def test_hardware_ignores_tune(self) -> None:
-        flags = encoder_quality_flags("hevc_nvenc", crf=23, tune="animation")
-        assert "-tune" not in flags
 
     def test_unknown_encoder_returns_empty(self) -> None:
         assert encoder_quality_flags("nonexistent", crf=23) == []
