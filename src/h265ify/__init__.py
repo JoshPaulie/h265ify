@@ -388,29 +388,35 @@ def _cmd_encode(args: argparse.Namespace, console: Console) -> None:
         name = job.input_path.name
 
         # Fit name to available terminal width.
-        # Fixed overhead: "  ✓ " (4) + size (10) + "  " (2) + reduction (8) + "  " (2) + elapsed (5) = 31
-        name_width = max(20, min(50, console.width - 31))
+        # Fixed overhead:
+        #   success: "  ✓ " (4) + in_size (9) + " → " (3) + out_size (9)
+        #          + "  (" (2) + pct (4) + ")  in " (6) + elapsed (5) = 42
+        #   failure: "  ✗ " (4) + "  failed  in " (13) + elapsed (5) = 22
+        name_width = max(20, min(50, console.width - 42))
         if len(name) > name_width:
             name = name[: name_width - 3] + "..."
 
         if not result.success:
             console.print(
-                f"  [red]\u2717[/] {name:<{name_width}} {'-':>10}  [red]failed[/]  {elapsed:>4}"
+                f"  [red]\u2717[/] {name:<{name_width}}  [red]failed[/]  in {elapsed:>5}"
             )
         elif result.output_size > 0:
             pct = (1 - result.output_size / result.input_size) * 100
             if pct > 0:
-                reduction = f"[green]-{pct:.0f}%[/]"
+                pct_str = f"[green]-{pct:.0f}%[/]"
             elif pct < -0.5:
-                reduction = f"[red]+{-pct:.0f}%[/]"
+                pct_str = f"[red]+{-pct:.0f}%[/]"
             else:
-                reduction = "~0%"
+                pct_str = "~0%"
             console.print(
-                f"  [green]\u2713[/] {name:<{name_width}} {format_size(result.output_size):>10}  {reduction:>8}  {elapsed:>4}"
+                f"  [green]\u2713[/] {name:<{name_width}}"
+                f" {format_size(result.input_size):>9} → {format_size(result.output_size):>9}"
+                f"  ({pct_str})"
+                f"  in {elapsed:>5}"
             )
         else:
             console.print(
-                f"  [green]\u2713[/] {name:<{name_width}} {'-':>10}  {'-':>8}  {elapsed:>4}"
+                f"  [green]\u2713[/] {name:<{name_width}} {'-':>9} → {'-':>9}  in {elapsed:>5}"
             )
 
     results, interrupted = run_pipeline(
