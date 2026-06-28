@@ -45,23 +45,23 @@ Output is mp4 by default. Files already in mp4, mkv, or mov keep their original 
 
 ## Flags
 
-| Flag               | Short        | Description                                                             |
-| ------------------ | ------------ | ----------------------------------------------------------------------- |
-| `paths`            | (positional) | Video files or directories to process                                   |
-| `--crf`            |              | Quality: 0-51, default 23 (lower = better)                              |
-| `--preset`         |              | Encoding speed/efficiency: `ultrafast` … `veryslow` (default `medium`)  |
-| `--tune`           |              | Tuning profile: `animation`, `grain`, `stillimage`, etc. (libx265 only) |
-| `--cpu`            |              | Force CPU encoding (libx265); slower but better compression             |
-| `--resize`         | `-r`         | Resize output: `720p`, `1080p`, `4k`, or `1280x720`                     |
-| `--no-upscale`     |              | Don't upscale if input is already ≤ target dimensions                   |
-| `--format`         |              | Force output container: `mp4`, `mkv`, or `mov`                          |
-| `--reencode-audio` |              | Re-encode audio (AAC/Opus) instead of stream-copy                       |
-| `--yolo`           | `-y`         | Replace original immediately after encoding                             |
-| `--permanent`      |              | Permanently delete replaced originals instead of sending to trash       |
-| `--replace`        |              | Replace originals with existing `_h265` copies (no encoding)            |
-| `--dry-run`        |              | Preview without encoding or replacing                                   |
-| `--halt-on-increase` | `-H`       | Stop the entire batch if any file comes out larger than the original    |
-| `--version`        |              | Print version and exit                                                  |
+| Flag                | Short        | Description |
+| ------------------- | ------------ | ----------- |
+| `paths`             | (positional) | Video files or directories. Directories are walked recursively. |
+| `--crf`             |              | Quality, 0–51. Lower = better. Default 23. Mapped to native scale for hardware encoders. |
+| `--preset`          |              | Speed/efficiency: `ultrafast` … `veryslow`. Default `medium`. Faster = bigger file, slower = smaller. Mapped to hardware equivalents. |
+| `--tune`            |              | Content tuning: `animation`, `grain`, `stillimage`, `fastdecode`, `zerolatency`. libx265 only. |
+| `--cpu`             |              | Force software encoding (libx265). Slower but better compression than hardware. |
+| `--resize`          | `-r`         | Shrink output: `720p`, `1080p`, `4k`, or exact `1280x720`. Maintains aspect ratio. |
+| `--no-upscale`      |              | With `--resize`: skip files already ≤ target resolution. |
+| `--format`          |              | Force output container: `mp4`, `mkv`, or `mov`. Default: preserve mp4/mkv/mov, convert everything else to mp4. |
+| `--reencode-audio`  |              | Re-encode audio (AAC for MP4/MOV, Opus for MKV) instead of stream-copy. |
+| `--yolo`            | `-y`         | Encode and replace the original immediately. Temp file used — original untouched until encode succeeds. |
+| `--replace`         |              | No encoding. Find existing `_h265` files and swap them in place of originals. |
+| `--dry-run`         |              | Preview what would happen. No encoding, no replacing. |
+| `--permanent`       |              | Permanently delete replaced originals. Default: move to system trash. |
+| `--halt-on-increase` | `-H`        | Stop the entire batch if any output is larger than the original. |
+| `--version`         |              | Print version and exit. |
 
 ## Preset mapping
 
