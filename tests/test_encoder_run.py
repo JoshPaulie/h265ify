@@ -1,4 +1,5 @@
 from unittest.mock import patch, MagicMock
+import time as _time
 from h265ify.encoder import run_encode, _write_ffmpeg_log, fmt_eta
 
 
@@ -109,4 +110,53 @@ def test_run_encode_no_duration() -> None:
     with patch("subprocess.Popen", return_value=mock_process):
         with patch("h265ify.encoder._write_ffmpeg_log"):
             success, errors = run_encode(["ffmpeg"], duration=0)
+            assert success is True
+
+
+def test_run_encode_cancel_check() -> None:
+    """cancel_check should terminate ffmpeg and return (True, [])."""
+    mock_process = MagicMock()
+
+    # Generator that yields stderr lines with a brief sleep so the
+    # drainer thread yields the GIL and the main loop gets a chance
+    # to poll the cancel_check.
+    def _slow_stderr():
+        while True:
+            _time.sleep(0.01)
+            yield "time=00:00:01.00 speed=1.0x\n"
+
+    mock_process.stderr = _slow_stderr()
+    mock_process.wait.return_value = 0
+
+    cancel_count = [0]
+
+    def cancel_check() -> bool:
+        cancel_count[0] += 1
+        return cancel_count[0] >= 2  # cancel on second poll (~2 s)
+
+    with patch("subprocess.Popen", return_value=mock_process):
+        with patch("h265ify.encoder._write_ffmpeg_log"):
+            success, errors = run_encode(
+                ["ffmpeg"], duration=100, cancel_check=cancel_check
+            )
+            assert success is True
+            assert errors == []
+            mock_process.terminate.assert_called_once()
+
+
+def test_run_encode_cancel_check_exception_is_safe() -> None:
+    """A cancel_check that raises should not crash the encode."""
+    mock_process = MagicMock()
+    mock_process.stderr = ["time=00:00:01.00 speed=1.0x\n"]
+    mock_process.wait.return_value = 0
+
+    def bad_cancel_check() -> bool:
+        raise RuntimeError("boom")
+
+    with patch("subprocess.Popen", return_value=mock_process):
+        with patch("h265ify.encoder._write_ffmpeg_log"):
+            success, errors = run_encode(
+                ["ffmpeg"], duration=100, cancel_check=bad_cancel_check
+            )
+            # The exception is swallowed — encode should complete normally
             assert success is True

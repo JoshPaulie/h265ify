@@ -61,6 +61,7 @@ class EncodeResult:
     elapsed: float  # seconds
     input_size: int
     output_size: int
+    skipped: bool = False  # encode succeeded but output was larger than input
 
 
 def _is_video_file(p: Path) -> bool:
@@ -236,11 +237,14 @@ def run_pipeline(
     resize: str | None = None,
     no_upscale: bool = False,
     reencode_audio: bool = False,
+    halt_on_increase: bool = False,
     on_job_complete: Callable[[EncodeJob, EncodeResult], None] | None = None,
 ) -> tuple[list[EncodeResult], bool]:
     """Run the encoding pipeline on all jobs. All encodes run sequentially.
 
     Pass dry_run=True to preview without encoding. Stops on first failure.
+    When *halt_on_increase* is True, also stops if any output is larger
+    than its input.
     Returns (results, interrupted).
     """
     # --- Dry run: preview what would happen ---
@@ -380,10 +384,20 @@ def run_pipeline(
                     console.print(w)
 
                 t0 = time.monotonic()
+
+                # Early-abort hook: poll the temp file size once per second.
+                # If it ever exceeds the original, kill ffmpeg to save cycles.
+                def _should_cancel() -> bool:
+                    try:
+                        return tmp_output.stat().st_size > job.probe_result.file_size
+                    except OSError:
+                        return False
+
                 success, errors = run_encode(
                     cmd,
                     duration=job.probe_result.duration,
                     progress_callback=_on_progress,
+                    cancel_check=_should_cancel if job.probe_result.file_size > 0 else None,
                 )
 
                 for e in errors:
@@ -391,40 +405,58 @@ def run_pipeline(
 
                 elapsed = time.monotonic() - t0
 
-                # Post-encode: atomically swap temp → output
+                # Post-encode: check output size on the temp file before
+                # moving it into place.  This is important for --yolo mode:
+                # we must not overwrite the original if the encode grew.
+                output_size = 0
+                skipped_larger = False
                 if success:
-                    try:
-                        # In replace (--yolo) mode: always trash/delete the original
-                        # first, then place the freshly encoded file.
-                        if replace:
-                            _delete_user_file(job.input_path, permanent=permanent)
-                            logger.info(f"deleted original: {job.input_path.name}")
-                        os.replace(tmp_output, output)
-                        _current_tmp = None  # swapped, no longer a temp file
-                    except OSError as e:
-                        console.print(
-                            f"  [red]error:[/] could not replace {job.input_path.name}: {e}"
-                        )
-                        success = False
-
-                # Determine output size
-                if success:
-                    output_size = output.stat().st_size
-                    if job.probe_result.file_size > 0:
-                        pct = (1 - output_size / job.probe_result.file_size) * 100
-                        logger.info(
-                            f"encoded:  {job.input_path.name}"
+                    output_size = tmp_output.stat().st_size
+                    if job.probe_result.file_size > 0 and output_size > job.probe_result.file_size:
+                        # Output is larger than input — abort this file.
+                        pct = (output_size / job.probe_result.file_size - 1) * 100
+                        logger.warning(
+                            f"skipped:  {job.input_path.name}  output larger"
                             f"  {format_size(job.probe_result.file_size)}"
                             f" → {format_size(output_size)}"
-                            f"  {pct:+.1f}%"
-                            f"  {format_duration(elapsed)}"
+                            f"  +{pct:.1f}%"
                         )
+                        tmp_output.unlink(missing_ok=True)
+                        _current_tmp = None
+                        skipped_larger = True
                     else:
-                        logger.info(
-                            f"encoded:  {job.input_path.name}  {format_duration(elapsed)}"
-                        )
+                        # Output is smaller (or input size unknown) — keep it.
+                        if replace:
+                            # In --yolo mode: trash/delete the original, then
+                            # swap the encoded file into its place.
+                            _delete_user_file(job.input_path, permanent=permanent)
+                            logger.info(f"deleted original: {job.input_path.name}")
+                        try:
+                            os.replace(tmp_output, output)
+                            _current_tmp = None  # swapped, no longer a temp file
+                        except OSError as e:
+                            console.print(
+                                f"  [red]error:[/] could not replace {job.input_path.name}: {e}"
+                            )
+                            success = False
+                            if tmp_output.exists():
+                                tmp_output.unlink(missing_ok=True)
+                            _current_tmp = None
+                        if success:
+                            if job.probe_result.file_size > 0:
+                                pct = (1 - output_size / job.probe_result.file_size) * 100
+                                logger.info(
+                                    f"encoded:  {job.input_path.name}"
+                                    f"  {format_size(job.probe_result.file_size)}"
+                                    f" → {format_size(output_size)}"
+                                    f"  {pct:+.1f}%"
+                                    f"  {format_duration(elapsed)}"
+                                )
+                            else:
+                                logger.info(
+                                    f"encoded:  {job.input_path.name}  {format_duration(elapsed)}"
+                                )
                 else:
-                    output_size = 0
                     logger.error(f"failed:   {job.input_path.name}")
                     # Clean up temp on failure
                     if tmp_output.exists():
@@ -438,6 +470,7 @@ def run_pipeline(
                     elapsed=elapsed,
                     input_size=job.probe_result.file_size,
                     output_size=output_size,
+                    skipped=skipped_larger,
                 )
 
                 completed_duration += job.probe_result.duration
@@ -465,6 +498,16 @@ def run_pipeline(
                 if not success:
                     if total_duration == 0:
                         # Fallback: file-count mode — fill remaining slots visually
+                        for _ in range(i, total):
+                            progress.update(overall, advance=1)
+                    break
+
+                # Halt batch on size increase if requested
+                if skipped_larger and halt_on_increase:
+                    console.print(
+                        "\n  [yellow]halting batch[/] — output grew larger than input"
+                    )
+                    if total_duration == 0:
                         for _ in range(i, total):
                             progress.update(overall, advance=1)
                     break
@@ -611,8 +654,9 @@ def print_summary(
         )
 
     total_attempted = len(results)
-    succeeded = sum(1 for r in results if r.success)
-    failed = total_attempted - succeeded
+    succeeded = sum(1 for r in results if r.success and not r.skipped)
+    skipped_larger = sum(1 for r in results if r.skipped)
+    failed = total_attempted - succeeded - skipped_larger
 
     if dry_run:
         n = total_attempted
@@ -630,10 +674,11 @@ def print_summary(
     total_time = 0.0
 
     for r in results:
-        total_in += r.input_size
         total_time += r.elapsed
-        if r.success and r.output_size > 0:
-            total_out += r.output_size
+        if not r.skipped:
+            total_in += r.input_size
+            if r.success and r.output_size > 0:
+                total_out += r.output_size
 
     if total_in > 0 and total_out > 0:
         pct = (1 - total_out / total_in) * 100
@@ -660,6 +705,11 @@ def print_summary(
             f"  total {format_duration(total_time)}"
         )
 
+    if skipped_larger > 0:
+        s = "s" if skipped_larger != 1 else ""
+        console.print(
+            f"  [yellow]{skipped_larger} skipped[/] (output larger than input)"
+        )
     if failed > 0:
         console.print(f"  [red]{failed} failed[/]")
         console.print(f"  [dim]see {FFMPEG_LOG_FILE} for full ffmpeg output[/]")

@@ -19,6 +19,8 @@ ProgressCallback = Callable[
     [float, float, float], None
 ]  # (pct 0-100, speed, current_seconds)
 
+CancelCheck = Callable[[], bool]  # Return True to abort encoding early
+
 # Regexes for parsing ffmpeg -stats output
 _TIME_RE = re.compile(r"time=(\d+):(\d+):(\d+)\.(\d+)")
 _SPEED_RE = re.compile(r"speed=\s*([\d.]+)x")
@@ -293,6 +295,7 @@ def run_encode(
     label: str | None = None,
     progress_inline: bool = False,
     progress_callback: ProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> tuple[bool, list[str]]:
     """Run an ffmpeg encode command. Returns True on success.
 
@@ -304,6 +307,10 @@ def run_encode(
 
     When *progress_inline* is True (legacy, sequential mode), progress is
     printed with \\r to update a single line in-place.
+
+    When *cancel_check* is provided, it is called roughly once per second.
+    If it returns True the ffmpeg process is terminated and the function
+    returns (True, []) — useful for early abort when output is too large.
     """
     try:
         process = subprocess.Popen(
@@ -369,12 +376,25 @@ def run_encode(
                     flush=True,
                 )
 
+    cancelled = False
+    poll_ticks = 0
     while drainer.is_alive():
         _parse_progress()
+        poll_ticks += 1
+        # Check cancel hook roughly once per second (sleep is 0.1 s)
+        if cancel_check and poll_ticks % 10 == 0:
+            try:
+                if cancel_check():
+                    process.terminate()
+                    cancelled = True
+                    break
+            except Exception:
+                pass  # never let a broken cancel hook crash the encode
         time.sleep(0.1)
 
-    # Drain any remaining lines after the thread exits
-    _parse_progress()
+    if not cancelled:
+        # Drain any remaining lines after the thread exits
+        _parse_progress()
 
     # Final newline to complete the inline progress line
     if progress_inline and not progress_callback:
@@ -382,6 +402,9 @@ def run_encode(
 
     drainer.join(timeout=1)
     returncode = process.wait()
+
+    if cancelled:
+        return True, []
 
     _write_ffmpeg_log(cmd, stderr_lines, returncode, label)
 

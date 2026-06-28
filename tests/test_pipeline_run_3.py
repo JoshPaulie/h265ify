@@ -7,6 +7,7 @@ from h265ify.hardware import Encoder
 
 
 def test_run_pipeline_replace_error() -> None:
+    """os.replace failure after a successful encode should be reported."""
     console = MagicMock()
     job = EncodeJob(
         Path("in.mp4"),
@@ -14,17 +15,25 @@ def test_run_pipeline_replace_error() -> None:
     )
     enc = Encoder(name="libx265", is_hardware=False, label="CPU")
 
+    # Encode succeeds, temp file exists with smaller size, but os.replace fails.
     with patch("h265ify.pipeline.run_encode", return_value=(True, [])):
-        with patch(
-            "h265ify.pipeline.os.replace", side_effect=OSError("test replace error")
-        ):
-            results, interrupted = run_pipeline([job], enc, 23, False, False, console)
-            assert not interrupted
-            assert len(results) == 1
-            assert not results[0].success
-            console.print.assert_any_call(
-                "  [red]error:[/] could not replace in.mp4: test replace error"
-            )
+        with patch("pathlib.Path.stat") as mock_stat:
+            mock_stat.return_value.st_size = 500  # smaller than input
+            with patch(
+                "h265ify.pipeline.os.replace",
+                side_effect=OSError("test replace error"),
+            ):
+                with patch("pathlib.Path.unlink"):
+                    with patch("pathlib.Path.exists", return_value=True):
+                        results, interrupted = run_pipeline(
+                            [job], enc, 23, False, False, console
+                        )
+                        assert not interrupted
+                        assert len(results) == 1
+                        assert not results[0].success
+                        console.print.assert_any_call(
+                            "  [red]error:[/] could not replace in.mp4: test replace error"
+                        )
 
 
 def test_run_pipeline_with_warnings_and_errors() -> None:

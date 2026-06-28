@@ -160,6 +160,12 @@ examples:
         action="store_true",
         help="with --resize: skip if input is already ≤ target resolution",
     )
+    advanced.add_argument(
+        "--halt-on-increase",
+        "-H",
+        action="store_true",
+        help="stop the entire batch if any file comes out larger than the original",
+    )
     parser.add_argument(
         "--version",
         action="version",
@@ -400,6 +406,11 @@ def _cmd_encode(args: argparse.Namespace, console: Console) -> None:
             console.print(
                 f"  [red]\u2717[/] {name:<{name_width}}  [red]failed[/]  in {elapsed:>5}"
             )
+        elif result.skipped:
+            pct = (result.output_size / result.input_size - 1) * 100
+            console.print(
+                f"  [yellow]\u21b7[/] {name:<{name_width}} [yellow]skipped[/] (output larger: +{pct:.0f}%)  in {elapsed:>5}"
+            )
         elif result.output_size > 0:
             pct = (1 - result.output_size / result.input_size) * 100
             if pct > 0:
@@ -432,6 +443,7 @@ def _cmd_encode(args: argparse.Namespace, console: Console) -> None:
         resize=args.resize,
         no_upscale=args.no_upscale,
         reencode_audio=args.reencode_audio,
+        halt_on_increase=args.halt_on_increase,
         console=console,
         on_job_complete=_on_job_complete,
     )
