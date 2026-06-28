@@ -54,12 +54,13 @@ Output is mp4 by default. Files already in mp4, mkv, or mov keep their original 
 | `--cpu`            |              | Force CPU encoding (libx265); slower but better compression             |
 | `--resize`         | `-r`         | Resize output: `720p`, `1080p`, `4k`, or `1280x720`                     |
 | `--no-upscale`     |              | Don't upscale if input is already ≤ target dimensions                   |
-| `--format`         |              | Force output container: `mp4` or `mkv`                                  |
+| `--format`         |              | Force output container: `mp4`, `mkv`, or `mov`                          |
 | `--reencode-audio` |              | Re-encode audio (AAC/Opus) instead of stream-copy                       |
 | `--yolo`           | `-y`         | Replace original immediately after encoding                             |
 | `--permanent`      |              | Permanently delete replaced originals instead of sending to trash       |
 | `--replace`        |              | Replace originals with existing `_h265` copies (no encoding)            |
 | `--dry-run`        |              | Preview without encoding or replacing                                   |
+| `--halt-on-increase` | `-H`       | Stop the entire batch if any file comes out larger than the original    |
 | `--version`        |              | Print version and exit                                                  |
 
 ## Preset mapping
