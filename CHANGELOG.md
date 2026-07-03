@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Probing is now multi-threaded.** ffprobe runs on a thread pool (`os.cpu_count()` workers by default), giving a near-linear speedup when probing large batches (hundreds or thousands of files).
 - Set `H265IFY_PROBE_THREADS=N` to override the thread count. This is intentionally an env var (not a CLI flag) to avoid confusion with encoding parallelism — encoding remains strictly sequential.
+- **Ctrl+C during probing is now handled gracefully.** Pending ffprobe calls are cancelled immediately and a clean "probing interrupted" message is shown instead of a raw traceback.
 
 ## [0.2.2] - 2026-07-03
 

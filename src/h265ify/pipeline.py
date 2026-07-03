@@ -156,18 +156,25 @@ def probe_files(
             f"probing {total} file(s) [{workers} threads]…", total=total
         )
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            fut_to_path = {executor.submit(probe, f): f for f in files}
-            for future in concurrent.futures.as_completed(fut_to_path):
-                result = future.result()
-                if result is not None:
-                    results.append(result)
-                else:
-                    f = fut_to_path[future]
-                    console.print(
-                        f"  [yellow]warning:[/] could not probe {f.name}, skipping"
-                    )
-                progress.advance(task)
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                fut_to_path = {executor.submit(probe, f): f for f in files}
+                for future in concurrent.futures.as_completed(fut_to_path):
+                    result = future.result()
+                    if result is not None:
+                        results.append(result)
+                    else:
+                        f = fut_to_path[future]
+                        console.print(
+                            f"  [yellow]warning:[/] could not probe {f.name}, skipping"
+                        )
+                    progress.advance(task)
+        except KeyboardInterrupt:
+            # Shut down the executor immediately; don't wait for in-flight probes.
+            executor.shutdown(wait=False, cancel_futures=True)
+            # Progress context manager with transient=True cleans up on exit.
+            console.print("\n  [yellow]probing interrupted[/]")
+            return results
 
     return results
 

@@ -180,6 +180,15 @@ examples:
     logger.info(f"mode={mode}  paths={', '.join(str(p) for p in args.paths)}")
     logger.info(f"log: {LOG_FILE}")
 
+    try:
+        _run(args, console, err_console)
+    except KeyboardInterrupt:
+        console.print("\n  [yellow]interrupted[/]")
+        sys.exit(130)
+
+
+def _run(args: argparse.Namespace, console: Console, err_console: Console) -> None:
+    """Dispatch to replace or encode mode after validation."""
     # --- Mutual exclusivity ---
     if args.replace and args.yolo:
         err_console.print("[red]error:[/] --replace and --yolo are mutually exclusive.")
