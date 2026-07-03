@@ -111,6 +111,7 @@ examples:
     )
     output_grp.add_argument(
         "--dry-run",
+        "--noop",
         action="store_true",
         help="show what would happen without encoding or replacing anything",
     )
@@ -267,6 +268,19 @@ def _cmd_replace(args: argparse.Namespace, console: Console) -> None:
         console.print(f"  {replaced} would be replaced")
     else:
         console.print(f"  [bold]{replaced} replaced[/], {skipped} skipped")
+
+    # Show space savings
+    total_original = sum(p.original_path.stat().st_size for p in pairs)
+    total_h265 = sum(p.h265_path.stat().st_size for p in pairs)
+    if total_original > 0 and total_h265 > 0:
+        saved = total_original - total_h265
+        pct = (1 - total_h265 / total_original) * 100
+        saved_str = format_size(saved) if saved > 0 else "0 B"
+        sign = "" if saved >= 0 else "+"
+        console.print(
+            f"  space saved: {saved_str} ({sign}{pct:.1f}%)"
+            f"  {format_size(total_original)} → {format_size(total_h265)}"
+        )
 
 
 def _cmd_encode(args: argparse.Namespace, console: Console) -> None:
