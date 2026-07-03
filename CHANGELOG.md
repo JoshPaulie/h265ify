@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.2.2] - 2026-07-03
+
+### Added
+
+- `--noop` as an alternative flag for `--dry-run`.
+- Space savings shown after `--replace` (both real and dry-run).
+
 ## [0.2.1] - 2026-06-28
 
 ### Removed
@@ -66,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rich-based colorful console output with per-file results and final summary.
 - Sequential encoding (one file at a time) to avoid splitting hardware encoder throughput.
 
+[0.2.2]: https://github.com/JoshPaulie/h265ify/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/JoshPaulie/h265ify/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/JoshPaulie/h265ify/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/JoshPaulie/h265ify/compare/v0.1.1...v0.1.2
