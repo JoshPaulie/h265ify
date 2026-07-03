@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import os
 import signal
 import time
@@ -109,14 +110,39 @@ def find_video_files(paths: list[Path], console: Console | None = None) -> list[
     return [f for f in _iter_files(paths, console) if _is_video_file(f)]
 
 
-def probe_files(files: list[Path], console: Console) -> list[ProbeResult]:
-    """Probe all candidate files with ffprobe, showing a progress bar."""
+def probe_files(
+    files: list[Path],
+    console: Console,
+) -> list[ProbeResult]:
+    """Probe all candidate files with ffprobe, showing a progress bar.
+
+    Uses a thread pool (default: ``os.cpu_count()``) to probe files in
+    parallel.  Each ffprobe call is I/O-bound, so threading yields a
+    near-linear speedup on large batches.
+
+    Set ``H265IFY_PROBE_THREADS`` to override the thread count.
+    """
     if not ffprobe_available():
         console.print("[red]error:[/] ffprobe not found.")
         return []
 
     results: list[ProbeResult] = []
     total = len(files)
+
+    # Respect H265IFY_PROBE_THREADS env var for advanced tuning.
+    # Named verbosely to avoid confusion with encoding parallelism.
+    env_threads = os.environ.get("H265IFY_PROBE_THREADS")
+    if env_threads is not None:
+        try:
+            workers = int(env_threads)
+        except ValueError:
+            console.print(
+                f"  [yellow]warning:[/] H265IFY_PROBE_THREADS='{env_threads}'"
+                " is not an integer, using default"
+            )
+            workers = os.cpu_count() or 4
+    else:
+        workers = os.cpu_count() or 4
 
     with Progress(
         SpinnerColumn(),
@@ -126,17 +152,22 @@ def probe_files(files: list[Path], console: Console) -> list[ProbeResult]:
         console=console,
         transient=True,
     ) as progress:
-        task = progress.add_task("probing files…", total=total)
+        task = progress.add_task(
+            f"probing {total} file(s) [{workers} threads]…", total=total
+        )
 
-        for f in files:
-            result = probe(f)
-            if result is not None:
-                results.append(result)
-            else:
-                console.print(
-                    f"  [yellow]warning:[/] could not probe {f.name}, skipping"
-                )
-            progress.advance(task)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            fut_to_path = {executor.submit(probe, f): f for f in files}
+            for future in concurrent.futures.as_completed(fut_to_path):
+                result = future.result()
+                if result is not None:
+                    results.append(result)
+                else:
+                    f = fut_to_path[future]
+                    console.print(
+                        f"  [yellow]warning:[/] could not probe {f.name}, skipping"
+                    )
+                progress.advance(task)
 
     return results
 
