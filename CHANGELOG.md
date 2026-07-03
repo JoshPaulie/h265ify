@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.3.0] - 2026-07-03
+
+### Changed
+
+- **Probing is now multi-threaded.** ffprobe runs on a thread pool (`os.cpu_count()` workers by default), giving a near-linear speedup when probing large batches (hundreds or thousands of files).
+- Set `H265IFY_PROBE_THREADS=N` to override the thread count. This is intentionally an env var (not a CLI flag) to avoid confusion with encoding parallelism — encoding remains strictly sequential.
+
 ## [0.2.2] - 2026-07-03
 
 ### Added
