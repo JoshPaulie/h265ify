@@ -12,7 +12,13 @@ from rich.console import Console
 
 from .encoder import format_size
 from .hardware import Encoder, detect_encoder
-from .logger import ERROR_LOG_FILE, LOG_FILE, logger, install_excepthook
+from .logger import (
+    ERROR_LOG_FILE,
+    FFMPEG_LOG_FILE,
+    LOG_FILE,
+    logger,
+    install_excepthook,
+)
 from .pipeline import (
     EncodeJob,
     EncodeResult,
@@ -169,14 +175,14 @@ examples:
         help="print version and exit",
     )
     parser.add_argument(
-        "--doctor",
+        "--report",
         action="store_true",
-        help="display last crash report and relevant logs for debugging",
+        help="write a diagnostic report with recent logs to a file",
     )
 
-    # --- doctor mode (must be checked before path requirement) ---
-    if "--doctor" in sys.argv:
-        _cmd_doctor()
+    # --- report mode (must be checked before path requirement) ---
+    if "--report" in sys.argv:
+        _cmd_report()
         return
 
     args = parser.parse_args()
@@ -247,57 +253,79 @@ def _run(args: argparse.Namespace, console: Console, err_console: Console) -> No
     _cmd_encode(args, console)
 
 
-def _cmd_doctor() -> None:
-    """Print the last exception and recent logs for debugging."""
+def _cmd_report() -> None:
+    """Write a diagnostic report to a timestamped file."""
+    from datetime import datetime
+
     console = Console(highlight=False)
-    console.print("[bold]h265ify doctor[/]\n")
+    console.print("[bold]h265ify diagnostic report[/]\n")
 
-    # --- Last exception ---
-    if ERROR_LOG_FILE.exists():
-        content = ERROR_LOG_FILE.read_text(encoding="utf-8")
-        if content.strip():
-            # Find the last exception block (between ===== separators)
-            blocks = [b.strip() for b in content.split("=" * 72) if b.strip()]
-            last = blocks[-1] if blocks else None
-            if last:
-                # Show the last 3 blocks (most recent exceptions)
-                recent = blocks[-3:] if len(blocks) > 1 else blocks
-                console.print("[bold]Last exception(s):[/]")
-                for b in recent:
-                    console.print(f"{'=' * 72}")
-                    console.print(b.strip())
-                    console.print(f"{'=' * 72}\n")
-                    if b != recent[-1]:
-                        console.print("[dim]--- older entry ---[/]\n")
-                console.print()
+    # Build report in memory
+    lines: list[str] = []
+    sep = "=" * 72
+
+    def _append_file(path: Path, heading: str, max_lines: int = 100) -> None:
+        lines.append(f"\n--- {heading} ---\n")
+        if path.exists():
+            content = path.read_text(encoding="utf-8").strip()
+            if content:
+                file_lines = content.split("\n")
+                if len(file_lines) > max_lines:
+                    lines.append(
+                        f"[showing last {max_lines} of {len(file_lines)} lines]\n"
+                    )
+                    file_lines = file_lines[-max_lines:]
+                for line in file_lines:
+                    lines.append(line + "\n")
             else:
-                console.print("[dim]no exceptions logged yet.[/]\n")
+                lines.append("(empty)\n")
         else:
-            console.print("[dim]no exceptions logged yet.[/]\n")
-    else:
-        console.print("[dim]no exception log found.[/]\n")
+            lines.append("(not found)\n")
 
-    # --- Recent main log ---
-    if LOG_FILE.exists():
-        lines = LOG_FILE.read_text(encoding="utf-8").strip().split("\n")
-        if lines:
-            # Show the last ~50 lines (roughly one session)
-            tail = lines[-50:]
-            console.print("[bold]Recent log entries:[/]")
-            for line in tail:
-                console.print(f"  {line}")
-            console.print()
-        else:
-            console.print("[dim]log file is empty.[/]\n")
-    else:
-        console.print("[dim]no application log found.[/]\n")
+    # Header
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    lines.append("h265ify diagnostic report\n")
+    lines.append(f"Generated: {timestamp}\n")
+    lines.append(f"Version:   {version('h265ify')}\n")
+    lines.append(f"Python:    {sys.version}\n")
+    lines.append(f"Platform:  {platform.platform()}\n")
+    lines.append(f"Log dir:   {LOG_FILE.parent}\n")
 
-    # --- Info block for copy-paste ---
-    console.print("[bold]System info:[/]")
-    console.print(f"  version: {version('h265ify')}")
-    console.print(f"  log dir: {LOG_FILE.parent}")
-    console.print(f"  python:  {sys.version}")
-    console.print(f"  platform: {platform.platform()}")
+    # Last exception
+    if ERROR_LOG_FILE.exists():
+        content = ERROR_LOG_FILE.read_text(encoding="utf-8").strip()
+        if content:
+            blocks = [b.strip() for b in content.split(sep) if b.strip()]
+            recent = blocks[-3:] if len(blocks) > 1 else blocks
+            lines.append("\n--- Last exception(s) ---\n")
+            for b in recent:
+                lines.append(f"{sep}\n")
+                lines.append(b + "\n")
+                lines.append(f"{sep}\n\n")
+    else:
+        lines.append("\n--- Last exception(s) ---\n(not found)\n")
+
+    # Application log
+    _append_file(LOG_FILE, "Application log (h265ify.log)", max_lines=100)
+
+    # FFmpeg log
+    _append_file(FFMPEG_LOG_FILE, "FFmpeg log (h265ify_ffmpeg.log)", max_lines=100)
+
+    # Write to file
+    report_path = (
+        LOG_FILE.parent
+        / f"h265ify_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    )
+    report_str = "".join(lines)
+    try:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(report_str, encoding="utf-8")
+    except OSError as e:
+        console.print(f"[red]error:[/] could not write report: {e}")
+        sys.exit(1)
+
+    console.print(f"Report written to: [bold]{report_path}[/]")
+    console.print(f"[dim]({len(report_str)} bytes)[/]")
 
     sys.exit(0)
 
