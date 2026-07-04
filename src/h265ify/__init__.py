@@ -74,7 +74,7 @@ examples:
 
     parser.add_argument(
         "paths",
-        nargs="+",
+        nargs="*",
         type=Path,
         help="video files or directories to process",
     )
@@ -123,7 +123,10 @@ examples:
         help="show what would happen without encoding or replacing anything",
     )
     output_grp.add_argument(
+        "-P",
+        "--perm",
         "--permanent",
+        dest="permanent",
         action="store_true",
         help="permanently delete replaced originals instead of sending to trash",
     )
@@ -180,12 +183,16 @@ examples:
         help="write a diagnostic report with recent logs to a file",
     )
 
-    # --- report mode (must be checked before path requirement) ---
-    if "--report" in sys.argv:
-        _cmd_report()
+    args = parser.parse_args()
+
+    # --- report mode (must run alone) ---
+    if args.report:
+        _cmd_report(args)
         return
 
-    args = parser.parse_args()
+    if not args.paths:
+        parser.print_usage()
+        sys.exit(1)
 
     console = Console(highlight=False)
     err_console = Console(stderr=True, highlight=False)
@@ -212,6 +219,20 @@ def _run(args: argparse.Namespace, console: Console, err_console: Console) -> No
     # --- Mutual exclusivity ---
     if args.replace and args.yolo:
         err_console.print("[red]error:[/] --replace and --yolo are mutually exclusive.")
+        sys.exit(1)
+
+    # --- --permanent requires --yolo or --replace ---
+    if args.permanent and not args.replace and not args.yolo:
+        err_console.print(
+            "[red]error:[/] --permanent has no effect without --yolo or --replace"
+        )
+        sys.exit(1)
+
+    # --- --permanent with --dry-run is nonsensical ---
+    if args.permanent and args.dry_run:
+        err_console.print(
+            "[red]error:[/] --permanent has no effect with --dry-run (nothing is changed)"
+        )
         sys.exit(1)
 
     # --- Replace mode ---
@@ -253,11 +274,39 @@ def _run(args: argparse.Namespace, console: Console, err_console: Console) -> No
     _cmd_encode(args, console)
 
 
-def _cmd_report() -> None:
+def _cmd_report(args: argparse.Namespace) -> None:
     """Write a diagnostic report to a timestamped file."""
     from datetime import datetime
 
     console = Console(highlight=False)
+
+    # --report is standalone: reject any other non-default flags
+    flag_names = [
+        ("--yolo", args.yolo),
+        ("--replace", args.replace),
+        ("--dry-run", args.dry_run),
+        ("--permanent", args.permanent),
+        ("--cpu", args.cpu),
+        ("--reencode-audio", args.reencode_audio),
+        ("--no-upscale", args.no_upscale),
+        ("--halt-on-increase", args.halt_on_increase),
+        ("--resize", bool(args.resize)),
+        ("--format", bool(args.output_format)),
+        ("--crf", args.crf != 23),
+        ("--preset", args.preset != "medium"),
+    ]
+    extra = [name for name, present in flag_names if present]
+    if args.paths:
+        extra.append("paths")
+
+    if extra:
+        err_console_ = Console(stderr=True, highlight=False)
+        err_console_.print(
+            f"[red]error:[/] --report cannot be combined with other options: "
+            f"{', '.join(extra)}"
+        )
+        sys.exit(1)
+
     console.print("[bold]h265ify diagnostic report[/]\n")
 
     # Build report in memory
