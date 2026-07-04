@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.4.0] - 2026-07-04
+
+### Added
+
+- **Exception logging.** Unhandled exceptions are now written to `h265ify_error.log` in the log directory, so crash details survive even if terminal output scrolls away.
+- **`--report` flag.** Writes a timestamped diagnostic report file to the log directory, bundling system info, the last exception(s), and the tail of `h265ify.log` and `h265ify_ffmpeg.log`. Use `hy --report` after a crash to collect everything needed for debugging.
+
+## [0.3.1] - 2026-07-04
+
+### Fixed
+
+- `--replace` no longer crashes with `FileNotFoundError` after successfully replacing files. Space savings are now computed before files are renamed.
+
 ## [0.3.0] - 2026-07-03
 
 ### Changed
@@ -81,6 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rich-based colorful console output with per-file results and final summary.
 - Sequential encoding (one file at a time) to avoid splitting hardware encoder throughput.
 
+[0.4.0]: https://github.com/JoshPaulie/h265ify/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/JoshPaulie/h265ify/compare/v0.3.0...v0.3.1
 [0.2.2]: https://github.com/JoshPaulie/h265ify/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/JoshPaulie/h265ify/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/JoshPaulie/h265ify/compare/v0.1.2...v0.2.0
