@@ -10,6 +10,7 @@ Override location with the H265IFY_LOG_DIR environment variable.
 Files:
   h265ify.log        — application events (encode start/finish, skips, errors)
   h265ify_ffmpeg.log — raw ffmpeg stderr from every encode invocation
+  h265ify_error.log  — unhandled exception tracebacks
 """
 
 from __future__ import annotations
@@ -17,7 +18,13 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import sys
+import traceback
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import TracebackType
 
 
 def _default_log_dir() -> Path:
@@ -42,6 +49,7 @@ def _log_dir() -> Path:
 LOG_DIR: Path = _log_dir()
 LOG_FILE: Path = LOG_DIR / "h265ify.log"
 FFMPEG_LOG_FILE: Path = LOG_DIR / "h265ify_ffmpeg.log"
+ERROR_LOG_FILE: Path = LOG_DIR / "h265ify_error.log"
 
 # --- Main application logger ---
 logger: logging.Logger = logging.getLogger("h265ify")
@@ -65,3 +73,41 @@ def _setup_logger() -> None:
 
 
 _setup_logger()
+
+
+def _log_exception(
+    exc_type: type[BaseException],
+    exc_value: BaseException,
+    exc_tb: TracebackType | None,
+) -> None:
+    """Write an unhandled exception to the error log file."""
+    try:
+        import datetime as _dt
+
+        ERROR_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with ERROR_LOG_FILE.open("a", encoding="utf-8") as _f:
+            _f.write(
+                f"{'=' * 72}\n"
+                f"Timestamp: {_dt.datetime.now().isoformat()}\n"
+                f"Exception: {exc_type.__name__}: {exc_value}\n"
+            )
+            if exc_tb is not None:
+                traceback.print_tb(exc_tb, file=_f)
+            _f.write(f"{'=' * 72}\n\n")
+    except OSError:
+        pass  # can't write error log — nothing we can do
+
+
+def install_excepthook() -> None:
+    """Install the h265ify exception hook, chaining the existing one."""
+    _previous = sys.excepthook
+
+    def _hook(
+        exc_type: type[BaseException],
+        exc_value: BaseException,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        _log_exception(exc_type, exc_value, exc_tb)
+        _previous(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = _hook

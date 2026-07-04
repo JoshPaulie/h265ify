@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import platform
 import sys
 from importlib.metadata import version
 from pathlib import Path
@@ -11,7 +12,7 @@ from rich.console import Console
 
 from .encoder import format_size
 from .hardware import Encoder, detect_encoder
-from .logger import LOG_FILE, logger
+from .logger import ERROR_LOG_FILE, LOG_FILE, logger, install_excepthook
 from .pipeline import (
     EncodeJob,
     EncodeResult,
@@ -167,11 +168,24 @@ examples:
         version=f"h265ify {version('h265ify')}",
         help="print version and exit",
     )
+    parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="display last crash report and relevant logs for debugging",
+    )
+
+    # --- doctor mode (must be checked before path requirement) ---
+    if "--doctor" in sys.argv:
+        _cmd_doctor()
+        return
 
     args = parser.parse_args()
 
     console = Console(highlight=False)
     err_console = Console(stderr=True, highlight=False)
+
+    # --- Install exception hook ---
+    install_excepthook()
 
     # --- Log session start ---
     _ver = version("h265ify")
@@ -231,6 +245,61 @@ def _run(args: argparse.Namespace, console: Console, err_console: Console) -> No
 
     # --- Encode mode ---
     _cmd_encode(args, console)
+
+
+def _cmd_doctor() -> None:
+    """Print the last exception and recent logs for debugging."""
+    console = Console(highlight=False)
+    console.print("[bold]h265ify doctor[/]\n")
+
+    # --- Last exception ---
+    if ERROR_LOG_FILE.exists():
+        content = ERROR_LOG_FILE.read_text(encoding="utf-8")
+        if content.strip():
+            # Find the last exception block (between ===== separators)
+            blocks = [b.strip() for b in content.split("=" * 72) if b.strip()]
+            last = blocks[-1] if blocks else None
+            if last:
+                # Show the last 3 blocks (most recent exceptions)
+                recent = blocks[-3:] if len(blocks) > 1 else blocks
+                console.print("[bold]Last exception(s):[/]")
+                for b in recent:
+                    console.print(f"{'=' * 72}")
+                    console.print(b.strip())
+                    console.print(f"{'=' * 72}\n")
+                    if b != recent[-1]:
+                        console.print("[dim]--- older entry ---[/]\n")
+                console.print()
+            else:
+                console.print("[dim]no exceptions logged yet.[/]\n")
+        else:
+            console.print("[dim]no exceptions logged yet.[/]\n")
+    else:
+        console.print("[dim]no exception log found.[/]\n")
+
+    # --- Recent main log ---
+    if LOG_FILE.exists():
+        lines = LOG_FILE.read_text(encoding="utf-8").strip().split("\n")
+        if lines:
+            # Show the last ~50 lines (roughly one session)
+            tail = lines[-50:]
+            console.print("[bold]Recent log entries:[/]")
+            for line in tail:
+                console.print(f"  {line}")
+            console.print()
+        else:
+            console.print("[dim]log file is empty.[/]\n")
+    else:
+        console.print("[dim]no application log found.[/]\n")
+
+    # --- Info block for copy-paste ---
+    console.print("[bold]System info:[/]")
+    console.print(f"  version: {version('h265ify')}")
+    console.print(f"  log dir: {LOG_FILE.parent}")
+    console.print(f"  python:  {sys.version}")
+    console.print(f"  platform: {platform.platform()}")
+
+    sys.exit(0)
 
 
 def _cmd_replace(args: argparse.Namespace, console: Console) -> None:
