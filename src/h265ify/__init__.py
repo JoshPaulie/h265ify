@@ -530,15 +530,19 @@ def _cmd_encode(args: argparse.Namespace, console: Console) -> None:
             console.print("nothing to do.")
         sys.exit(0)
 
-    console.print(f"[bold]encoding {len(jobs)} file(s)[/]")
+    n_jobs = len(jobs)
+    total_input = sum(j.probe_result.file_size for j in jobs)
+    size_str = f"  ({format_size(total_input)})" if total_input > 0 else ""
+    console.print(f"[bold]{n_jobs} file(s) to encode[/]{size_str}")
     if skipped:
-        console.print()
-        for r in skipped:
-            if r.is_h265:
-                console.print(f"  skip  {r.path.name}  (already h265)")
-            else:
-                out = get_output_path(r.path, args.yolo, args.output_format)
-                console.print(f"  skip  {r.path.name}  ({out.name} exists)")
+        h265_count = sum(1 for r in skipped if r.is_h265)
+        exists_count = len(skipped) - h265_count
+        reasons: list[str] = []
+        if h265_count:
+            reasons.append(f"{h265_count} already h265")
+        if exists_count:
+            reasons.append(f"{exists_count} output exists")
+        console.print(f"  skip {len(skipped)} file(s) ({', '.join(reasons)})")
     console.print()
 
     def _on_job_complete(job: EncodeJob, result: EncodeResult) -> None:
