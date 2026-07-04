@@ -289,16 +289,10 @@ def run_pipeline(
         results: list[EncodeResult] = []
         for job in jobs:
             output = get_output_path(job.input_path, replace, output_format)
-            parts: list[str] = []
-            if resize:
-                parts.append(f"resize={resize}")
-                if no_upscale:
-                    parts.append("no-upscale")
-            if reencode_audio:
-                parts.append("reencode-audio")
-            extra = f" ({', '.join(parts)})" if parts else ""
+            input_size = job.probe_result.file_size
+            size_str = f" ({format_size(input_size)})" if input_size > 0 else ""
             console.print(
-                f"  would encode: {job.input_path.name} → {output.name}{extra}"
+                f"  {job.input_path.name}{size_str}"
             )
             logger.info(f"dry-run: {job.input_path.name} → {output.name}")
             results.append(
