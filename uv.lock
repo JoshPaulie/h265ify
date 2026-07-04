@@ -57,7 +57,7 @@ wheels = [
 
 [[package]]
 name = "h265ify"
-version = "0.4.0"
+version = "0.4.2"
 source = { editable = "." }
 dependencies = [
     { name = "rich" },

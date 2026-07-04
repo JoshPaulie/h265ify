@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Dry-run output is now less verbose: shows filename + size per file, and a single tally line for skipped files instead of listing each one.
 - `--report` is now standalone — it errors if combined with other flags or paths.
 
 ### Fixed
