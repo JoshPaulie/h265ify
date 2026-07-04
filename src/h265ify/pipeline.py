@@ -433,7 +433,9 @@ def run_pipeline(
                     cmd,
                     duration=job.probe_result.duration,
                     progress_callback=_on_progress,
-                    cancel_check=_should_cancel if job.probe_result.file_size > 0 else None,
+                    cancel_check=_should_cancel
+                    if job.probe_result.file_size > 0
+                    else None,
                 )
 
                 for e in errors:
@@ -448,7 +450,10 @@ def run_pipeline(
                 skipped_larger = False
                 if success:
                     output_size = tmp_output.stat().st_size
-                    if job.probe_result.file_size > 0 and output_size > job.probe_result.file_size:
+                    if (
+                        job.probe_result.file_size > 0
+                        and output_size > job.probe_result.file_size
+                    ):
                         # Output is larger than input — abort this file.
                         pct = (output_size / job.probe_result.file_size - 1) * 100
                         logger.warning(
@@ -480,7 +485,9 @@ def run_pipeline(
                             _current_tmp = None
                         if success:
                             if job.probe_result.file_size > 0:
-                                pct = (1 - output_size / job.probe_result.file_size) * 100
+                                pct = (
+                                    1 - output_size / job.probe_result.file_size
+                                ) * 100
                                 logger.info(
                                     f"encoded:  {job.input_path.name}"
                                     f"  {format_size(job.probe_result.file_size)}"
@@ -742,7 +749,6 @@ def print_summary(
         )
 
     if skipped_larger > 0:
-        s = "s" if skipped_larger != 1 else ""
         console.print(
             f"  [yellow]{skipped_larger} skipped[/] (output larger than input)"
         )
