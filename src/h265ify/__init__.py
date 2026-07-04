@@ -268,6 +268,10 @@ def _cmd_replace(args: argparse.Namespace, console: Console) -> None:
 
     console.print(f"[bold]found {len(pairs)} replacement pairs[/]\n")
 
+    # Compute sizes before renaming (h265 files won't exist after run_replace)
+    total_original = sum(p.original_path.stat().st_size for p in pairs)
+    total_h265 = sum(p.h265_path.stat().st_size for p in pairs)
+
     replaced, skipped = run_replace(
         pairs, dry_run=args.dry_run, permanent=args.permanent, console=console
     )
@@ -279,8 +283,6 @@ def _cmd_replace(args: argparse.Namespace, console: Console) -> None:
         console.print(f"  [bold]{replaced} replaced[/], {skipped} skipped")
 
     # Show space savings
-    total_original = sum(p.original_path.stat().st_size for p in pairs)
-    total_h265 = sum(p.h265_path.stat().st_size for p in pairs)
     if total_original > 0 and total_h265 > 0:
         saved = total_original - total_h265
         pct = (1 - total_h265 / total_original) * 100
