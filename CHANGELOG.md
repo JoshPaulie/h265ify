@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `--perm` and `-P` as aliases for `--permanent`.
+
+### Changed
+
+- `--report` is now standalone — it errors if combined with other flags or paths.
+
+### Fixed
+
+- `--permanent` without `--yolo` or `--replace` is now caught with a clear error (it had no effect).
+- `--permanent` with `--dry-run` / `--noop` is now caught with a clear error (nothing is changed).
+
 ## [0.4.0] - 2026-07-04
 
 ### Added
