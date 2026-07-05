@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Dry-run output is now less verbose: shows filename + size per file, and a single tally line for skipped files instead of listing each one.
 - `--report` is now standalone — it errors if combined with other flags or paths.
+- `--report` now finds and surfaces the last failed ffmpeg encode session (including the full command and crash stderr) instead of a blind tail of the log, and maps negative return codes to signal names (e.g. `rc=-11` → `"SIGSEGV (segmentation fault)"`).
+- `--report` deduplicates consecutive identical lines in both the application and ffmpeg logs, fitting more distinct information into the report window.
 
 ### Fixed
 

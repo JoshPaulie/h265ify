@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import platform
+import re
 import sys
 from importlib.metadata import version
 from pathlib import Path
@@ -274,6 +275,172 @@ def _run(args: argparse.Namespace, console: Console, err_console: Console) -> No
     _cmd_encode(args, console)
 
 
+def _dedup_consecutive(raw: list[str]) -> list[str]:
+    """Collapse consecutive identical lines into a single line with a repeat count.
+
+    ["a", "a", "a", "b", "c", "c"] → ["a (3x)", "b", "c (2x)"]
+    """
+    if not raw:
+        return []
+
+    result: list[str] = []
+    current = raw[0]
+    count = 1
+
+    for line in raw[1:]:
+        if line == current:
+            count += 1
+        else:
+            result.append(f"{current} ({count}x)" if count > 1 else current)
+            current = line
+            count = 1
+
+    result.append(f"{current} ({count}x)" if count > 1 else current)
+    return result
+
+
+def _append_ffmpeg_log(path: Path, lines: list[str], tail: int = 100) -> None:
+    """Append the last failed encode session + recent tail of the ffmpeg log.
+
+    The ffmpeg log is a concatenation of per-encode sessions delimited by:
+
+        ======== ... ========
+        <ts>  rc=<code>  <label>
+        cmd: <ffmpeg command>
+        -------- ... --------
+        <stderr output>
+
+    Instead of a blind tail-chop (which can drown a crash in progress output),
+    this extracts the *last failed session* first with a signal-name annotation,
+    then appends the recent tail, and finishes with a compact rc-status summary
+    of the last 20 sessions.
+    """
+    sep72 = "=" * 72
+
+    _SIGNAL_NAMES: dict[int, str] = {
+        -1: "SIGHUP (hangup)",
+        -2: "SIGINT (interrupt)",
+        -3: "SIGQUIT (quit)",
+        -6: "SIGABRT (abort)",
+        -9: "SIGKILL (killed)",
+        -11: "SIGSEGV (segmentation fault — ffmpeg crashed)",
+        -15: "SIGTERM (terminated)",
+    }
+
+    def _signal_name(rc: int) -> str:
+        return _SIGNAL_NAMES.get(rc, f"signal {rc}")
+
+    if not path.exists():
+        lines.append("(not found)\n")
+        return
+
+    content = path.read_text(encoding="utf-8").strip()
+    if not content:
+        lines.append("(empty)\n")
+        return
+
+    all_lines = content.splitlines()
+    total = len(all_lines)
+
+    # Walk sessions: find every === header followed by an rc= line
+    session_starts: list[int] = []  # line index of each === header
+    session_rc: dict[int, int] = {}  # start_idx → rc
+    session_label: dict[int, str] = {}  # start_idx → label
+
+    for i, line in enumerate(all_lines):
+        if line == sep72 and i + 1 < total:
+            rc_line = all_lines[i + 1]
+            if "rc=" in rc_line:
+                session_starts.append(i)
+                m = re.search(r"rc=(-?\d+)", rc_line)
+                if m:
+                    rc = int(m.group(1))
+                    session_rc[i] = rc
+                    # extract label from "ts  rc=N  ...label..."
+                    parts = rc_line.split(None, 2)
+                    lbl = parts[2] if len(parts) > 2 else rc_line
+                    session_label[i] = lbl
+
+    # Identify the last failed session
+    fail_idx: int | None = None
+    for s in reversed(session_starts):
+        if session_rc.get(s, 0) != 0:
+            fail_idx = s
+            break
+
+    # Find its extent: next === or end of file
+    def _session_end(start: int) -> int:
+        for s in session_starts:
+            if s > start:
+                return s
+        return total
+
+    # ── Section 1: Last failed encode ──
+    if fail_idx is not None:
+        rc = session_rc.get(fail_idx, 0)
+        label = session_label.get(fail_idx, "")
+        fail_end = _session_end(fail_idx)
+        session_lines = _dedup_consecutive(all_lines[fail_idx:fail_end])
+
+        sig = _signal_name(rc)
+        lines.append(f"\n[Last failed encode — rc={rc}  {sig}]\n")
+        lines.append(f"  File: {label}\n")
+        for sl in session_lines:
+            lines.append(sl + "\n")
+        lines.append(f"\n[End — {len(session_lines)} unique line groups]\n")
+
+    # ── Section 2: Recent log tail ──
+    tail_start = max(0, total - tail)
+    # If the failed session sits inside the tail window, exclude its lines
+    # to avoid duplication
+    if fail_idx is not None and fail_idx >= tail_start:
+        fail_end = _session_end(fail_idx)
+        tail_pre: list[str] = []
+        tail_post: list[str] = []
+        for j in range(tail_start, total):
+            if j < fail_idx:
+                tail_pre.append(all_lines[j])
+            elif j >= fail_end:
+                tail_post.append(all_lines[j])
+        if tail_pre:
+            deduped = _dedup_consecutive(tail_pre)
+            lines.append(
+                f"\n[Recent log tail before failed session"
+                f" ({len(tail_pre)} raw → {len(deduped)} groups)]\n"
+            )
+            for tl in deduped:
+                lines.append(tl + "\n")
+        if tail_post:
+            deduped = _dedup_consecutive(tail_post)
+            lines.append(
+                f"\n[Recent log tail after failed session"
+                f" ({len(tail_post)} raw → {len(deduped)} groups)]\n"
+            )
+            for tl in deduped:
+                lines.append(tl + "\n")
+    else:
+        raw_tail = all_lines[tail_start:]
+        deduped = _dedup_consecutive(raw_tail)
+        lines.append(
+            f"\n[Recent log tail ({len(raw_tail)} raw → {len(deduped)} unique groups"
+            f" of {total} total lines)]\n"
+        )
+        for tl in deduped:
+            lines.append(tl + "\n")
+
+    # ── Section 3: Quick rc summary of recent sessions ──
+    recent = session_starts[-20:]
+    if recent:
+        lines.append(f"\n[Recent session status ({len(recent)} sessions)]\n")
+        # Show newest first
+        for s in reversed(recent):
+            rc = session_rc.get(s, 0)
+            ts = all_lines[s + 1].split("rc=")[0].strip()
+            sig = _signal_name(rc) if rc < 0 else ""
+            status = "OK" if rc == 0 else "FAIL"
+            lines.append(f"  {ts}  rc={rc}  {status:4s}  {sig}\n")
+
+
 def _cmd_report(args: argparse.Namespace) -> None:
     """Write a diagnostic report to a timestamped file."""
     from datetime import datetime
@@ -318,12 +485,19 @@ def _cmd_report(args: argparse.Namespace) -> None:
         if path.exists():
             content = path.read_text(encoding="utf-8").strip()
             if content:
-                file_lines = content.split("\n")
-                if len(file_lines) > max_lines:
+                raw_lines = content.split("\n")
+                file_lines = _dedup_consecutive(raw_lines)
+                raw_count = len(raw_lines)
+                deduped_count = len(file_lines)
+                if deduped_count > max_lines:
                     lines.append(
-                        f"[showing last {max_lines} of {len(file_lines)} lines]\n"
+                        f"[showing last {max_lines} of {raw_count} lines"
+                        f" (deduped to {deduped_count})]\n"
                     )
                     file_lines = file_lines[-max_lines:]
+                else:
+                    if raw_count != deduped_count:
+                        lines.append(f"[{raw_count} lines, deduped to {deduped_count}]\n")
                 for line in file_lines:
                     lines.append(line + "\n")
             else:
@@ -357,8 +531,9 @@ def _cmd_report(args: argparse.Namespace) -> None:
     # Application log
     _append_file(LOG_FILE, "Application log (h265ify.log)", max_lines=100)
 
-    # FFmpeg log
-    _append_file(FFMPEG_LOG_FILE, "FFmpeg log (h265ify_ffmpeg.log)", max_lines=100)
+    # FFmpeg log — session-aware extraction
+    lines.append("\n--- FFmpeg log (h265ify_ffmpeg.log) ---\n")
+    _append_ffmpeg_log(FFMPEG_LOG_FILE, lines, tail=100)
 
     # Write to file
     report_path = (
