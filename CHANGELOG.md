@@ -11,7 +11,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `--perm` and `-P` as aliases for `--permanent`.
 - Failed encodes are now automatically retried up to 2 more times (3 attempts total) before moving on to the next file. Each retry is logged with the attempt count; the final failure denotes how many attempts were exhausted.
-- Encoding no longer halts the entire batch on a single file failure — the pipeline continues to the next file and reports failures in the summary.
 
 ### Changed
 
