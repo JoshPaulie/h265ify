@@ -37,13 +37,14 @@ def test_run_pipeline_failure_cleanup_tmp() -> None:
     with patch("h265ify.pipeline.run_encode", return_value=(False, [])):
         with patch("pathlib.Path.exists", return_value=True):
             with patch("pathlib.Path.unlink") as mock_unlink:
-                results, interrupted = run_pipeline(
-                    [job], enc, 23, False, False, console
-                )
-                assert not interrupted
-                assert len(results) == 1
-                assert not results[0].success
-                mock_unlink.assert_called_with(missing_ok=True)
+                with patch("h265ify.pipeline.Progress"):
+                    results, interrupted = run_pipeline(
+                        [job], enc, 23, False, False, console
+                    )
+                    assert not interrupted
+                    assert len(results) == 1
+                    assert not results[0].success
+                    mock_unlink.assert_called_with(missing_ok=True)
 
 
 def test_run_pipeline_on_job_complete() -> None:
@@ -78,7 +79,9 @@ def test_run_pipeline_multiple_failure_stop() -> None:
     )
     enc = Encoder(name="libx265", is_hardware=False, label="CPU")
 
-    with patch("h265ify.pipeline.run_encode", return_value=(False, [])):
+    with patch(
+        "h265ify.pipeline.run_encode", return_value=(False, [])
+    ) as mock_encode:
         with patch("pathlib.Path.exists", return_value=True):
             with patch("pathlib.Path.unlink"):
                 with patch("h265ify.pipeline.Progress"):
@@ -86,7 +89,11 @@ def test_run_pipeline_multiple_failure_stop() -> None:
                         [job1, job2], enc, 23, False, False, console
                     )
                     assert not interrupted
-                    assert len(results) == 1  # Stops on first failure
+                    # Both files attempted, both fail after 3 retries each
+                    assert len(results) == 2
+                    assert not results[0].success
+                    assert not results[1].success
+                    assert mock_encode.call_count == 6  # 3 attempts × 2 files
 
 
 def test_run_pipeline_keyboard_interrupt() -> None:

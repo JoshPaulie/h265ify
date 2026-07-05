@@ -567,13 +567,10 @@ def run_pipeline(
 
                 results.append(result)
 
-                # Stop on first failure
+                # Log failure and continue to next file
                 if not success:
                     if total_duration == 0:
-                        # Fallback: file-count mode — fill remaining slots visually
-                        for _ in range(i, total):
-                            progress.update(overall, advance=1)
-                    break
+                        progress.update(overall, advance=1)
 
                 # Halt batch on size increase if requested
                 if skipped_larger and halt_on_increase:
