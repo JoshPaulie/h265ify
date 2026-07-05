@@ -17,8 +17,9 @@ skip existing output"]
     Run["run_pipeline
 sequential encode loop
 auto-skip larger output
---halt-on-increase stops
-batch on first oversize"]
+auto-retry crash 3 times
+continue on failure
+--halt-on-increase stops batch"]
     Summary["print_summary
 sizes, time,
 skipped (h265/exists/larger)/failed"]
@@ -57,12 +58,16 @@ keep original"]
 tmp → out"]
     UnlinkFail["unlink tmp.mp4
 (clean up trash)"]
+    RetryCheck{"< 3 attempts
+used?"}
 
     Input --> Build --> Ffmpeg --> Success
     Success -->|yes| SizeCheck
     SizeCheck -->|yes| SkipLarge --> Done["done (skipped, continue)"]
     SizeCheck -->|no| ReplaceOut --> DoneDone["done"]
-    Success -->|no| UnlinkFail --> Failed["failed / halt"]
+    Success -->|no| UnlinkFail --> RetryCheck
+    RetryCheck -->|yes| Ffmpeg
+    RetryCheck -->|no| Failed["failed, continue"]
 ```
 
 ### Temp file naming
@@ -132,6 +137,8 @@ untouched)"]
 ```
 
 Because the temp file only becomes the final output via `os.replace()` (atomic on all modern filesystems), a partially-written file can never appear at the final path. Power loss, kill -9, kernel panic: no corruption.
+
+On ffmpeg crash (non-zero exit), the temp file is cleaned up and the encode is automatically retried up to 2 more times (3 attempts total). If all attempts fail, the pipeline logs the failure and moves to the next file — the batch is not interrupted.
 
 ## `--replace` mode (separate path)
 
