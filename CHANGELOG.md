@@ -5,7 +5,7 @@ All notable changes to h265ify will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.5.0] - 2026-07-05
 
 ### Added
 
@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `--permanent` without `--yolo` or `--replace` is now caught with a clear error (it had no effect).
 - `--permanent` with `--dry-run` / `--noop` is now caught with a clear error (nothing is changed).
+
+## Unreleased
 
 ## [0.4.0] - 2026-07-04
 
@@ -111,6 +113,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rich-based colorful console output with per-file results and final summary.
 - Sequential encoding (one file at a time) to avoid splitting hardware encoder throughput.
 
+[0.5.0]: https://github.com/JoshPaulie/h265ify/compare/v0.4.2...v0.5.0
 [0.4.0]: https://github.com/JoshPaulie/h265ify/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/JoshPaulie/h265ify/compare/v0.3.0...v0.3.1
 [0.2.2]: https://github.com/JoshPaulie/h265ify/compare/v0.2.1...v0.2.2
