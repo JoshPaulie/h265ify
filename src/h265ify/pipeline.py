@@ -413,29 +413,66 @@ def run_pipeline(
                 for w in cmd_warnings:
                     console.print(w)
 
-                t0 = time.monotonic()
+                # ── Encoding with auto-retry on crash ──
+                max_retries = 2  # total attempts = max_retries + 1
+                success = False
+                errors: list[str] = []
+                elapsed = 0.0
 
-                # Early-abort hook: poll the temp file size once per second.
-                # If it ever exceeds the original, kill ffmpeg to save cycles.
-                def _should_cancel() -> bool:
-                    try:
-                        return tmp_output.stat().st_size > job.probe_result.file_size
-                    except OSError:
-                        return False
+                for attempt in range(1, max_retries + 2):
+                    if attempt > 1:
+                        logger.warning(
+                            f"retry {attempt}/{max_retries + 1}:"
+                            f" {job.input_path.name}"
+                        )
+                        if tmp_output.exists():
+                            tmp_output.unlink(missing_ok=True)
+                        _current_tmp = tmp_output
 
-                success, errors = run_encode(
-                    cmd,
-                    duration=job.probe_result.duration,
-                    progress_callback=_on_progress,
-                    cancel_check=_should_cancel
-                    if job.probe_result.file_size > 0
-                    else None,
-                )
+                    t0 = time.monotonic()
 
-                for e in errors:
-                    console.print(e)
+                    # Early-abort hook: poll the temp file size once per second.
+                    # If it ever exceeds the original, kill ffmpeg to save cycles.
+                    def _should_cancel() -> bool:
+                        try:
+                            return (
+                                tmp_output.stat().st_size
+                                > job.probe_result.file_size
+                            )
+                        except OSError:
+                            return False
 
-                elapsed = time.monotonic() - t0
+                    success, errors = run_encode(
+                        cmd,
+                        duration=job.probe_result.duration,
+                        progress_callback=_on_progress,
+                        cancel_check=_should_cancel
+                        if job.probe_result.file_size > 0
+                        else None,
+                    )
+
+                    for e in errors:
+                        console.print(e)
+
+                    elapsed = time.monotonic() - t0
+
+                    if success:
+                        break  # encoded OK — proceed to size check
+
+                    # Crash failure — retry unless we've exhausted attempts
+                    if attempt < max_retries + 1:
+                        logger.warning(
+                            f"attempt {attempt}/{max_retries + 1} failed for"
+                            f" {job.input_path.name}, retrying"
+                        )
+                        if tmp_output.exists():
+                            tmp_output.unlink(missing_ok=True)
+                        _current_tmp = None
+                    else:
+                        logger.error(
+                            f"failed:   {job.input_path.name}"
+                            f"  ({max_retries + 1} attempts)"
+                        )
 
                 # Post-encode: check output size on the temp file before
                 # moving it into place.  This is important for --yolo mode:
@@ -494,8 +531,7 @@ def run_pipeline(
                                     f"encoded:  {job.input_path.name}  {format_duration(elapsed)}"
                                 )
                 else:
-                    logger.error(f"failed:   {job.input_path.name}")
-                    # Clean up temp on failure
+                    # Clean up temp on failure (retry loop already logged)
                     if tmp_output.exists():
                         tmp_output.unlink(missing_ok=True)
                     _current_tmp = None

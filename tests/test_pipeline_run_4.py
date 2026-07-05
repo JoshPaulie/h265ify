@@ -101,3 +101,80 @@ def test_run_pipeline_keyboard_interrupt() -> None:
         results, interrupted = run_pipeline([job], enc, 23, False, False, console)
         assert interrupted
         assert len(results) == 0
+
+
+def test_run_pipeline_retry_on_crash_then_succeeds() -> None:
+    """Crash twice, succeed on the third attempt."""
+    console = MagicMock()
+    job = EncodeJob(
+        Path("in.mp4"),
+        ProbeResult(Path("in.mp4"), False, "h264", 1920, 1080, 10.0, 1000),
+    )
+    enc = Encoder(name="libx265", is_hardware=False, label="CPU")
+
+    # First 2 calls fail, 3rd succeeds
+    encode_returns = [(False, []), (False, []), (True, [])]
+
+    with patch(
+        "h265ify.pipeline.run_encode", side_effect=encode_returns
+    ) as mock_encode:
+        with patch("pathlib.Path.stat", return_value=MagicMock(st_size=500)):
+            with patch("pathlib.Path.exists", return_value=True):
+                with patch("pathlib.Path.unlink"):
+                    with patch("h265ify.pipeline.os.replace"):
+                        results, interrupted = run_pipeline(
+                            [job], enc, 23, False, False, console
+                        )
+                        assert not interrupted
+                        assert len(results) == 1
+                        assert results[0].success
+                        # 3 total attempts (1 initial + 2 retries)
+                        assert mock_encode.call_count == 3
+
+
+def test_run_pipeline_retry_exhausted_fails() -> None:
+    """All 3 attempts fail — final result is failure."""
+    console = MagicMock()
+    job = EncodeJob(
+        Path("in.mp4"),
+        ProbeResult(Path("in.mp4"), False, "h264", 1920, 1080, 10.0, 1000),
+    )
+    enc = Encoder(name="libx265", is_hardware=False, label="CPU")
+
+    with patch(
+        "h265ify.pipeline.run_encode", return_value=(False, [])
+    ) as mock_encode:
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.unlink"):
+                results, interrupted = run_pipeline(
+                    [job], enc, 23, False, False, console
+                )
+                assert not interrupted
+                assert len(results) == 1
+                assert not results[0].success
+                # 3 total attempts (1 initial + 2 retries)
+                assert mock_encode.call_count == 3
+
+
+def test_run_pipeline_retry_not_triggered_by_success() -> None:
+    """A first-attempt success calls run_encode exactly once."""
+    console = MagicMock()
+    job = EncodeJob(
+        Path("in.mp4"),
+        ProbeResult(Path("in.mp4"), False, "h264", 1920, 1080, 10.0, 1000),
+    )
+    enc = Encoder(name="libx265", is_hardware=False, label="CPU")
+
+    with patch(
+        "h265ify.pipeline.run_encode", return_value=(True, [])
+    ) as mock_encode:
+        with patch("pathlib.Path.stat", return_value=MagicMock(st_size=500)):
+            with patch("pathlib.Path.exists", return_value=True):
+                with patch("h265ify.pipeline.os.replace"):
+                    results, interrupted = run_pipeline(
+                        [job], enc, 23, False, False, console
+                    )
+                    assert not interrupted
+                    assert len(results) == 1
+                    assert results[0].success
+                    assert mock_encode.call_count == 1
