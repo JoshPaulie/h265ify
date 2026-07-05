@@ -29,16 +29,20 @@
  │  existing output │
  └────────┬─────────┘
           │
- ┌────────▼─────────┐
- │   run_pipeline   │
- │  sequential      │
- └────────┬─────────┘
+ ┌────────▼─────────────────────┐
+ │        run_pipeline          │
+ │  sequential encode loop      │
+ │  auto-skip larger output     │
+ │  --halt-on-increase stops    │
+ │  batch on first oversize     │
+ └────────┬─────────────────────┘
           │
- ┌────────▼─────────┐
- │  print_summary   │
- │  sizes, time,    │
- │  skipped/failed  │
- └──────────────────┘
+ ┌────────▼─────────────────────┐
+ │  print_summary               │
+ │  sizes, time,                │
+ │  skipped (h265/exists/       │
+ │   larger)/failed             │
+ └──────────────────────────────┘
 ```
 
 ## Encode path (per file)
@@ -50,37 +54,44 @@ Every encode (normal or `--yolo`) uses an atomic temp file. The final output onl
   │ input.mp4 │
   └─────┬─────┘
         │
-  ┌─────▼───────────────────────────────────────────┐
-  │          build_command(input, tmp_output)       │
-  │  - encoder + quality flags                      │
-  │  - resize filter                                │
-  │  - HDR metadata passthrough                     │
-  │  - audio: stream-copy or re-encode              │
-  │  - subtitles: mov_text (MP4) or copy (MKV)      │
-  │  - container flags: hvc1, faststart (MP4 only)  │
-  └─────┬───────────────────────────────────────────┘
+  ┌─────▼─────────────────────────────────────────────┐
+  │          build_command(input, tmp_output)         │
+  │  - encoder + quality flags                        │
+  │  - resize filter                                  │
+  │  - HDR metadata passthrough                       │
+  │  - audio: stream-copy or re-encode                │
+  │  - subtitles: mov_text (MP4) / copy (MKV)         │
+  │  - container flags: hvc1, faststart (MP4 only)    │
+  └─────┬─────────────────────────────────────────────┘
         │
-  ┌─────▼──────────────────────┐
-  │   ffmpeg -y ... tmp.mp4    │
-  │   subprocess.Popen(stderr) │
-  │   real-time progress (%)   │
-  └─────┬──────────────────────┘
+  ┌─────▼────────────────────────────────────────────┐
+  │   ffmpeg -y ... tmp.mp4                          │
+  │   subprocess.Popen(stderr)                       │
+  │   real-time progress (%)                         │
+  │   early abort: cancel if tmp > input size        │
+  └─────┬────────────────────────────────────────────┘
         │
      success?
      ╱       ╲
    yes        no
-   ╱           ╲
-  ▼             ▼
-┌───────────┐  ┌───────────────────┐
-│ os.replace│  │ unlink tmp.mp4    │
-│ tmp → out │  │ (clean up trash)  │
-└──────┬────┘  └────────┬──────────┘
-       │                │
-       ▼                ▼
-  ┌────────┐       ┌─────────┐
-  │  done  │       │  failed │
-  └────────┘       │  halt   │
-                   └─────────┘
+   ╱            ╲
+  ▼              ▼
+┌──────────┐  ┌──────────────────┐
+│tmp size  │  │ unlink tmp.mp4   │
+│ > orig?  │  │ (clean up trash) │
+└────┬─────┘  └────────┬─────────┘
+   ╱    ╲              │
+ yes     no            │
+  ╱        ╲           ▼
+ ┌──────┐ ┌─────────┐ ┌───────┐
+ │ skip │ │os.replace│ │failed │
+ │(del  │ │tmp → out │ │ halt  │
+ │ tmp) │ └────┬────┘ └───────┘
+ │(keep │      │
+ │ orig)│      ▼
+ └──────┘  ┌───────┐
+           │ done  │
+           └───────┘
 ```
 
 ### Temp file naming
@@ -103,9 +114,23 @@ No state file needed. The filesystem is the source of truth:
                 ├── exists → previous attempt crashed.
                 │            ffmpeg -y overwrites it, re-encode.
                 └── absent → fresh encode needed.
+                                └── (also: auto-skip from oversized
+                                     output — temp was deleted,
+                                     original untouched, retries
+                                     next run)
 ```
 
 Because the temp file only becomes the final output via `os.replace()` (atomic on all modern filesystems), a partially-written file can never appear at the final path. Power loss, kill -9, kernel panic: no corruption.
+
+### Auto-skip (output larger than input)
+
+After encoding, if the temp file is larger than the original, it is deleted instead of moved into place. The original is left untouched. This is **automatic** — no flag needed.
+
+During encoding, a mid-stream abort check polls the temp file every second; if it has already exceeded the original size, ffmpeg is killed early to save cycles.
+
+### `--halt-on-increase` (`-H`)
+
+With this flag, a batch-wide stop is triggered on the first oversized output. Without it, encoding continues with the remaining files (each oversized file is still auto-skipped).
 
 ## `--replace` mode (separate path)
 

@@ -73,8 +73,8 @@ Output is mp4 by default. Files already in mp4, mkv, or mov keep their original 
 | -------------------- | ----- | ----------- |
 | `--yolo`             | `-y`  | Encode and replace the original immediately. Temp file used — original untouched until encode succeeds. |
 | `--replace`          |       | No encoding. Find existing `_h265` files and swap them in place of originals. |
-| `--dry-run`          |       | Preview what would happen. No encoding, no replacing. |
-| `--permanent`        |       | Permanently delete replaced originals. Default: move to system trash. |
+| `--dry-run`          | `--noop` | Preview what would happen. No encoding, no replacing. |
+| `--permanent`        | `-P` / `--perm` | Permanently delete replaced originals. Default: move to system trash. |
 | `--halt-on-increase` | `-H`  | Stop the entire batch if any output is larger than the original. |
 
 ### Meta
@@ -82,6 +82,7 @@ Output is mp4 by default. Files already in mp4, mkv, or mov keep their original 
 | Flag        | Short | Description |
 | ----------- | ----- | ----------- |
 | `--version` |       | Print version and exit. |
+| `--report`  |       | Write a diagnostic report with recent logs to a file, for debugging crashes. |
 
 ## Preset mapping
 
