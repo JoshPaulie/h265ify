@@ -50,6 +50,7 @@ class EncodeJob:
 
     input_path: Path
     probe_result: ProbeResult
+    crf: int | None = None  # per-job CRF override (set by --auto)
 
 
 @dataclass
@@ -156,25 +157,24 @@ def probe_files(
             f"probing {total} file(s) [{workers} threads]…", total=total
         )
 
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-                fut_to_path = {executor.submit(probe, f): f for f in files}
-                for future in concurrent.futures.as_completed(fut_to_path):
-                    result = future.result()
-                    if result is not None:
-                        results.append(result)
-                    else:
-                        f = fut_to_path[future]
-                        console.print(
-                            f"  [yellow]warning:[/] could not probe {f.name}, skipping"
-                        )
-                    progress.advance(task)
+            fut_to_path = {executor.submit(probe, f): f for f in files}
+            for future in concurrent.futures.as_completed(fut_to_path):
+                result = future.result()
+                if result is not None:
+                    results.append(result)
+                else:
+                    f = fut_to_path[future]
+                    console.print(
+                        f"  [yellow]warning:[/] could not probe {f.name}, skipping"
+                    )
+                progress.advance(task)
         except KeyboardInterrupt:
-            # Shut down the executor immediately; don't wait for in-flight probes.
-            executor.shutdown(wait=False, cancel_futures=True)
-            # Progress context manager with transient=True cleans up on exit.
             console.print("\n  [yellow]probing interrupted[/]")
             return results
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     return results
 
@@ -291,9 +291,7 @@ def run_pipeline(
             output = get_output_path(job.input_path, replace, output_format)
             input_size = job.probe_result.file_size
             size_str = f" ({format_size(input_size)})" if input_size > 0 else ""
-            console.print(
-                f"  {job.input_path.name}{size_str}"
-            )
+            console.print(f"  {job.input_path.name}{size_str}")
             logger.info(f"dry-run: {job.input_path.name} → {output.name}")
             results.append(
                 EncodeResult(
@@ -401,7 +399,7 @@ def run_pipeline(
                     encode_target,
                     job.probe_result,
                     encoder,
-                    crf,
+                    job.crf if job.crf is not None else crf,
                     output_format,
                     reencode_audio=reencode_audio,
                     preset=preset,
@@ -421,10 +419,13 @@ def run_pipeline(
 
                 for attempt in range(1, max_retries + 2):
                     if attempt > 1:
+                        # Exponential backoff: 1s, 2s
+                        backoff = 2 ** (attempt - 2)
                         logger.warning(
                             f"retry {attempt}/{max_retries + 1}:"
-                            f" {job.input_path.name}"
+                            f" {job.input_path.name} (waiting {backoff}s)"
                         )
+                        time.sleep(backoff)
                         if tmp_output.exists():
                             tmp_output.unlink(missing_ok=True)
                         _current_tmp = tmp_output
@@ -436,8 +437,7 @@ def run_pipeline(
                     def _should_cancel() -> bool:
                         try:
                             return (
-                                tmp_output.stat().st_size
-                                > job.probe_result.file_size
+                                tmp_output.stat().st_size > job.probe_result.file_size
                             )
                         except OSError:
                             return False
