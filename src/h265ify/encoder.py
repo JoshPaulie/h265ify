@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 
-from .hardware import Encoder, encoder_quality_flags
+from .hardware import Encoder, encoder_quality_flags, pix_fmt_for_encoder
 from .logger import FFMPEG_LOG_FILE, logger
 from .probe import ProbeResult
 
@@ -128,15 +128,9 @@ def build_command(
             cmd.extend(["-vf", scale_filter])
 
     # Pixel format / bit depth
-    if probe.color.bit_depth >= 10:
-        # Preserve 10-bit
-        if encoder.name == "libx265":
-            cmd.extend(["-pix_fmt", "yuv420p10le"])
-        elif encoder.name == "hevc_videotoolbox":
-            cmd.extend(["-pix_fmt", "p010le"])  # VideoToolbox 10-bit
-        # NVENC, QSV, AMF handle 10-bit via -pix_fmt p010le or yuv420p10le
-        elif encoder.name in ("hevc_nvenc", "hevc_qsv", "hevc_amf"):
-            cmd.extend(["-pix_fmt", "p010le"])
+    pix_fmt = pix_fmt_for_encoder(encoder.name, probe.color.bit_depth)
+    if pix_fmt is not None:
+        cmd.extend(["-pix_fmt", pix_fmt])
 
     # Color metadata passthrough (validated to avoid encoder rejections)
     if (

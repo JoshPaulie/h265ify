@@ -207,6 +207,20 @@ _AMF_PRESET_MAP: dict[str, str] = {
 }
 
 
+def pix_fmt_for_encoder(encoder_name: str, bit_depth: int) -> str | None:
+    """Return the pixel format for an encoder at the given bit depth.
+
+    Returns ``None`` for 8-bit content (encoder default applies).
+    """
+    if bit_depth < 10:
+        return None
+    if encoder_name == "libx265":
+        return "yuv420p10le"
+    if encoder_name in ("hevc_videotoolbox", "hevc_nvenc", "hevc_qsv", "hevc_amf"):
+        return "p010le"
+    return None
+
+
 def encoder_quality_flags(
     encoder_name: str,
     crf: int,
