@@ -433,7 +433,7 @@ def test_cmd_encode_success_with_skipped_not_h265() -> None:
                     with patch("h265ify.print_summary"):
                         _cmd_encode(args, console)
                         console.print.assert_any_call(
-                            "  skip  test2.mp4  (test2_h265.mp4 exists)"
+                            "  skip 1 file(s) (1 output exists)"
                         )
 
 

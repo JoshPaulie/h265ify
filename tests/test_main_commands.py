@@ -17,15 +17,19 @@ def test_cmd_replace_permanent_abort() -> None:
     console.input.assert_called_once()
 
 
-def test_cmd_replace_permanent_confirm() -> None:
+def test_cmd_replace_permanent_confirm(tmp_path: Path) -> None:
     console = MagicMock()
     console.get_time = lambda: 1.0
     console.width = 80
     console.input.return_value = "yes"
-    args = MagicMock(permanent=True, dry_run=False, paths=[Path(".")])
+    h265 = tmp_path / "in_h265.mp4"
+    orig = tmp_path / "in.mp4"
+    h265.write_bytes(b"smaller file")
+    orig.write_bytes(b"original file content here")
+    args = MagicMock(permanent=True, dry_run=False, paths=[tmp_path])
     with patch(
         "h265ify.find_replace_pairs",
-        return_value=[ReplacePair(Path("in.mp4"), Path("in_h265.mp4"))],
+        return_value=[ReplacePair(h265, orig)],
     ):
         with patch("h265ify.run_replace", return_value=(1, 0)):
             _cmd_replace(args, console)
@@ -43,14 +47,18 @@ def test_cmd_replace_no_pairs() -> None:
         assert e.value.code == 0
 
 
-def test_cmd_replace_dry_run() -> None:
+def test_cmd_replace_dry_run(tmp_path: Path) -> None:
     console = MagicMock()
     console.get_time = lambda: 1.0
     console.width = 80
-    args = MagicMock(permanent=False, dry_run=True, paths=[Path(".")])
+    h265 = tmp_path / "in_h265.mp4"
+    orig = tmp_path / "in.mp4"
+    h265.write_bytes(b"smaller file")
+    orig.write_bytes(b"original file content here")
+    args = MagicMock(permanent=False, dry_run=True, paths=[tmp_path])
     with patch(
         "h265ify.find_replace_pairs",
-        return_value=[ReplacePair(Path("in.mp4"), Path("in_h265.mp4"))],
+        return_value=[ReplacePair(h265, orig)],
     ):
         with patch("h265ify.run_replace", return_value=(1, 0)):
             _cmd_replace(args, console)

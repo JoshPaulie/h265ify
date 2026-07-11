@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from h265ify.hardware import Encoder, encoder_quality_flags
+from h265ify.hardware import Encoder, encoder_quality_flags, pix_fmt_for_encoder
 
 
 class TestEncoderQualityFlags:
@@ -127,3 +127,34 @@ class TestEncoderDataclass:
     def test_hardware_field(self) -> None:
         e = Encoder(name="hevc_nvenc", is_hardware=True, label="NVENC")
         assert e.is_hardware
+
+
+class TestPixFmtForEncoder:
+    def test_8bit_returns_none(self) -> None:
+        assert pix_fmt_for_encoder("libx265", 8) is None
+        assert pix_fmt_for_encoder("hevc_videotoolbox", 8) is None
+        assert pix_fmt_for_encoder("hevc_nvenc", 8) is None
+
+    def test_10bit_libx265(self) -> None:
+        assert pix_fmt_for_encoder("libx265", 10) == "yuv420p10le"
+
+    def test_10bit_videotoolbox(self) -> None:
+        assert pix_fmt_for_encoder("hevc_videotoolbox", 10) == "p010le"
+
+    def test_10bit_nvenc(self) -> None:
+        assert pix_fmt_for_encoder("hevc_nvenc", 10) == "p010le"
+
+    def test_10bit_qsv(self) -> None:
+        assert pix_fmt_for_encoder("hevc_qsv", 10) == "p010le"
+
+    def test_10bit_amf(self) -> None:
+        assert pix_fmt_for_encoder("hevc_amf", 10) == "p010le"
+
+    def test_12bit_libx265(self) -> None:
+        assert pix_fmt_for_encoder("libx265", 12) == "yuv420p10le"
+
+    def test_unknown_encoder_returns_none(self) -> None:
+        assert pix_fmt_for_encoder("nonexistent", 10) is None
+
+    def test_unknown_encoder_8bit(self) -> None:
+        assert pix_fmt_for_encoder("nonexistent", 8) is None

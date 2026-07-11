@@ -79,9 +79,7 @@ def test_run_pipeline_multiple_failure_stop() -> None:
     )
     enc = Encoder(name="libx265", is_hardware=False, label="CPU")
 
-    with patch(
-        "h265ify.pipeline.run_encode", return_value=(False, [])
-    ) as mock_encode:
+    with patch("h265ify.pipeline.run_encode", return_value=(False, [])) as mock_encode:
         with patch("pathlib.Path.exists", return_value=True):
             with patch("pathlib.Path.unlink"):
                 with patch("h265ify.pipeline.Progress"):
@@ -148,9 +146,7 @@ def test_run_pipeline_retry_exhausted_fails() -> None:
     )
     enc = Encoder(name="libx265", is_hardware=False, label="CPU")
 
-    with patch(
-        "h265ify.pipeline.run_encode", return_value=(False, [])
-    ) as mock_encode:
+    with patch("h265ify.pipeline.run_encode", return_value=(False, [])) as mock_encode:
         with patch("pathlib.Path.exists", return_value=True):
             with patch("pathlib.Path.unlink"):
                 results, interrupted = run_pipeline(
@@ -172,9 +168,7 @@ def test_run_pipeline_retry_not_triggered_by_success() -> None:
     )
     enc = Encoder(name="libx265", is_hardware=False, label="CPU")
 
-    with patch(
-        "h265ify.pipeline.run_encode", return_value=(True, [])
-    ) as mock_encode:
+    with patch("h265ify.pipeline.run_encode", return_value=(True, [])) as mock_encode:
         with patch("pathlib.Path.stat", return_value=MagicMock(st_size=500)):
             with patch("pathlib.Path.exists", return_value=True):
                 with patch("h265ify.pipeline.os.replace"):

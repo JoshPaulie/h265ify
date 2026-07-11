@@ -43,18 +43,21 @@ def _make_log(tmp_path: Path, sessions: list[dict]) -> Path:
 
 def test_shows_last_failed_session(tmp_path: Path) -> None:
     """A failed encode (rc=-11) is extracted and annotated with signal name."""
-    log = _make_log(tmp_path, [
-        {"rc": 0, "label": "Companion.mp4"},
-        {"rc": 0, "label": "Compliance.mp4"},
-        {
-            "rc": -11,
-            "label": "Twilight.Saga.2008...h265-tmp.mp4",
-            "lines": [
-                "frame=137595 fps= 62 ...",
-                "Segmentation fault (core dumped)",
-            ],
-        },
-    ])
+    log = _make_log(
+        tmp_path,
+        [
+            {"rc": 0, "label": "Companion.mp4"},
+            {"rc": 0, "label": "Compliance.mp4"},
+            {
+                "rc": -11,
+                "label": "Twilight.Saga.2008...h265-tmp.mp4",
+                "lines": [
+                    "frame=137595 fps= 62 ...",
+                    "Segmentation fault (core dumped)",
+                ],
+            },
+        ],
+    )
     out: list[str] = []
     _append_ffmpeg_log(log, out, tail=10)
 
@@ -69,10 +72,13 @@ def test_shows_last_failed_session(tmp_path: Path) -> None:
 
 def test_no_failed_sessions(tmp_path: Path) -> None:
     """When all encodes succeeded, no 'failed encode' section appears."""
-    log = _make_log(tmp_path, [
-        {"rc": 0, "label": "Companion.mp4"},
-        {"rc": 0, "label": "Compliance.mp4"},
-    ])
+    log = _make_log(
+        tmp_path,
+        [
+            {"rc": 0, "label": "Companion.mp4"},
+            {"rc": 0, "label": "Compliance.mp4"},
+        ],
+    )
     out: list[str] = []
     _append_ffmpeg_log(log, out, tail=10)
 
@@ -83,15 +89,18 @@ def test_no_failed_sessions(tmp_path: Path) -> None:
 
 def test_multiple_failures_shows_last_only(tmp_path: Path) -> None:
     """Only the *last* failed session is extracted."""
-    log = _make_log(tmp_path, [
-        {"rc": -6, "label": "First.crash.mkv", "lines": ["OOM killed"]},
-        {"rc": 0, "label": "Good.mp4"},
-        {
-            "rc": -11,
-            "label": "Second.crash.mkv",
-            "lines": ["Segfault"],
-        },
-    ])
+    log = _make_log(
+        tmp_path,
+        [
+            {"rc": -6, "label": "First.crash.mkv", "lines": ["OOM killed"]},
+            {"rc": 0, "label": "Good.mp4"},
+            {
+                "rc": -11,
+                "label": "Second.crash.mkv",
+                "lines": ["Segfault"],
+            },
+        ],
+    )
     out: list[str] = []
     _append_ffmpeg_log(log, out, tail=10)
 
@@ -105,15 +114,18 @@ def test_multiple_failures_shows_last_only(tmp_path: Path) -> None:
 
 def test_failed_session_within_tail_no_duplication(tmp_path: Path) -> None:
     """When the failed session is within the tail window, lines aren't duplicated."""
-    log = _make_log(tmp_path, [
-        {"rc": 0, "label": "A.mp4"},
-        {"rc": 0, "label": "B.mp4"},
-        {
-            "rc": -11,
-            "label": "C.mp4",
-            "lines": ["crash output"],
-        },
-    ])
+    log = _make_log(
+        tmp_path,
+        [
+            {"rc": 0, "label": "A.mp4"},
+            {"rc": 0, "label": "B.mp4"},
+            {
+                "rc": -11,
+                "label": "C.mp4",
+                "lines": ["crash output"],
+            },
+        ],
+    )
     out: list[str] = []
     _append_ffmpeg_log(log, out, tail=200)
 
@@ -124,12 +136,22 @@ def test_failed_session_within_tail_no_duplication(tmp_path: Path) -> None:
 
 def test_signal_name_mapping(tmp_path: Path) -> None:
     """Each known negative return code gets a descriptive signal name."""
-    signals = {-1: "SIGHUP", -2: "SIGINT", -6: "SIGABRT", -9: "SIGKILL", -11: "SIGSEGV", -15: "SIGTERM"}
+    signals = {
+        -1: "SIGHUP",
+        -2: "SIGINT",
+        -6: "SIGABRT",
+        -9: "SIGKILL",
+        -11: "SIGSEGV",
+        -15: "SIGTERM",
+    }
 
     for rc, name in signals.items():
-        log = _make_log(tmp_path, [
-            {"rc": rc, "label": f"fail_{rc}.mp4", "lines": ["error"]},
-        ])
+        log = _make_log(
+            tmp_path,
+            [
+                {"rc": rc, "label": f"fail_{rc}.mp4", "lines": ["error"]},
+            ],
+        )
         out: list[str] = []
         _append_ffmpeg_log(log, out, tail=10)
         assert name in "\n".join(out), f"missing {name} for rc={rc}"
@@ -137,9 +159,12 @@ def test_signal_name_mapping(tmp_path: Path) -> None:
 
 def test_unknown_signal(tmp_path: Path) -> None:
     """An undocumented negative return code falls back to 'signal N'."""
-    log = _make_log(tmp_path, [
-        {"rc": -4, "label": "weird.mp4", "lines": ["hmm"]},
-    ])
+    log = _make_log(
+        tmp_path,
+        [
+            {"rc": -4, "label": "weird.mp4", "lines": ["hmm"]},
+        ],
+    )
     out: list[str] = []
     _append_ffmpeg_log(log, out, tail=10)
     assert "signal -4" in "\n".join(out)
@@ -220,17 +245,20 @@ def test_dedup_repeat_at_end() -> None:
 
 def test_ffmpeg_log_dedup_repeated_lines(tmp_path: Path) -> None:
     """Repeated consecutive stderr lines in a failed session are compressed."""
-    log = _make_log(tmp_path, [
-        {
-            "rc": -11,
-            "label": "crash.mp4",
-            "lines": [
-                "same error",
-                "same error",
-                "same error",
-            ],
-        },
-    ])
+    log = _make_log(
+        tmp_path,
+        [
+            {
+                "rc": -11,
+                "label": "crash.mp4",
+                "lines": [
+                    "same error",
+                    "same error",
+                    "same error",
+                ],
+            },
+        ],
+    )
     out: list[str] = []
     _append_ffmpeg_log(log, out, tail=10)
     text = "\n".join(out)

@@ -28,7 +28,7 @@ def test_run_pipeline_dry_run_extra() -> None:
     assert not interrupted
     assert len(results) == 1
     console.print.assert_any_call(
-        "  would encode: in.mp4 → in_h265.mp4 (resize=720p, no-upscale, reencode-audio)"
+        "  in.mp4 (1000.0 B)"
     )
 
 
