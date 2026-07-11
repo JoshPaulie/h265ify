@@ -9,6 +9,10 @@ import sys
 from importlib.metadata import version
 from pathlib import Path
 
+import concurrent.futures
+import os
+import threading
+
 from rich.console import Console
 
 from .encoder import format_size
@@ -32,6 +36,8 @@ from .pipeline import (
     run_pipeline,
     run_replace,
 )
+from .probe import ProbeResult
+from .vmaf import determine_crf, kill_all_vmaf_procs, vmaf_available
 
 
 def _valid_resize(spec: str) -> bool:
@@ -70,6 +76,8 @@ examples:
   h265ify --dry-run ~/Movies/      preview what would be encoded
   h265ify --preset fast video.mkv  faster encoding, slightly larger file
   h265ify --cpu video.mkv          force software encoding (libx265)
+  h265ify --vmaf 95 video.mkv      evaluate and recommend optimal CRF using VMAF (no encode)
+  h265ify --vmaf 93 ~/Videos/      evaluate all videos with custom VMAF target
 """,
     )
 
@@ -85,10 +93,23 @@ examples:
     encoding.add_argument(
         "--crf",
         type=int,
-        default=23,
+        default=None,
         metavar="N",
         help="quality: 0–51, lower = better (default: 23). "
-        "For hardware encoders, mapped to the closest equivalent.",
+        "For hardware encoders, mapped to the closest equivalent. "
+        "Mutually exclusive with --vmaf.",
+    )
+    encoding.add_argument(
+        "--vmaf",
+        nargs="?",
+        const=95.0,
+        type=float,
+        default=None,
+        metavar="VMAF",
+        help="evaluate and recommend optimal CRF using VMAF perceptual quality "
+        "metric (no encoding). Probes each file at several CRF values, measures "
+        "VMAF, and reports the CRF that achieves the target score (default: 95). "
+        "Mutually exclusive with --crf and other encoding options.",
     )
     encoding.add_argument(
         "--resize",
@@ -204,7 +225,11 @@ examples:
     # --- Log session start ---
     _ver = version("h265ify")
     logger.info(f"=== h265ify {_ver} ===")
-    mode = "dry-run" if args.dry_run else ("replace" if args.replace else "encode")
+    mode = (
+        "vmaf-eval"
+        if args.vmaf
+        else ("dry-run" if args.dry_run else ("replace" if args.replace else "encode"))
+    )
     logger.info(f"mode={mode}  paths={', '.join(str(p) for p in args.paths)}")
     logger.info(f"log: {LOG_FILE}")
 
@@ -222,6 +247,14 @@ def _run(args: argparse.Namespace, console: Console, err_console: Console) -> No
         err_console.print("[red]error:[/] --replace and --yolo are mutually exclusive.")
         sys.exit(1)
 
+    if args.vmaf is not None and args.replace:
+        err_console.print("[red]error:[/] --vmaf and --replace are mutually exclusive.")
+        sys.exit(1)
+
+    if args.vmaf is not None and args.yolo:
+        err_console.print("[red]error:[/] --vmaf and --yolo are mutually exclusive.")
+        sys.exit(1)
+
     # --- --permanent requires --yolo or --replace ---
     if args.permanent and not args.replace and not args.yolo:
         err_console.print(
@@ -236,11 +269,51 @@ def _run(args: argparse.Namespace, console: Console, err_console: Console) -> No
         )
         sys.exit(1)
 
+    # --- VMAF evaluation mode ---
+    if args.vmaf is not None:
+        # ── Mutually exclusive with encoding flags ──
+        encoding_conflicts: list[str] = []
+        if args.crf is not None:
+            encoding_conflicts.append("--crf")
+        if args.resize:
+            encoding_conflicts.append("--resize")
+        if args.reencode_audio:
+            encoding_conflicts.append("--reencode-audio")
+        if args.output_format:
+            encoding_conflicts.append("--format")
+        if args.halt_on_increase:
+            encoding_conflicts.append("--halt-on-increase")
+        if args.no_upscale:
+            encoding_conflicts.append("--no-upscale")
+        if encoding_conflicts:
+            err_console.print(
+                f"[red]error:[/] --vmaf is mutually exclusive with encoding flags: "
+                f"{', '.join(encoding_conflicts)}"
+            )
+            sys.exit(1)
+
+        # Validate --vmaf value
+        if not (0 <= args.vmaf <= 100):
+            err_console.print("[red]error:[/] --vmaf must be between 0 and 100")
+            sys.exit(1)
+
+        if not vmaf_available():
+            err_console.print(
+                "[red]error:[/] --vmaf requires libvmaf support in ffmpeg. "
+                "Install ffmpeg with --enable-libvmaf."
+            )
+            sys.exit(1)
+
+        _cmd_vmaf(args, console)
+        return
+
     # --- Replace mode ---
     if args.replace:
         # --- Warn about ignored encoding flags ---
         ignored: list[str] = []
-        if args.crf != 23:
+        if args.vmaf is not None:
+            ignored.append("--vmaf")
+        if args.crf is not None:
             ignored.append("--crf")
         if args.resize:
             ignored.append("--resize")
@@ -258,12 +331,15 @@ def _run(args: argparse.Namespace, console: Console, err_console: Console) -> No
         _cmd_replace(args, console)
         return
 
+    # --- Fallback CRF default ---
+    if args.crf is None:
+        args.crf = 23
+
     # --- Validate CRF (encode mode only) ---
     if not (0 <= args.crf <= 51):
         err_console.print("[red]error:[/] --crf must be between 0 and 51")
         sys.exit(1)
 
-    # --- Validate --resize (encode mode only) ---
     if args.resize and not _valid_resize(args.resize):
         err_console.print(
             f"[red]error:[/] invalid --resize value '{args.resize}'"
@@ -459,7 +535,7 @@ def _cmd_report(args: argparse.Namespace) -> None:
         ("--halt-on-increase", args.halt_on_increase),
         ("--resize", bool(args.resize)),
         ("--format", bool(args.output_format)),
-        ("--crf", args.crf != 23),
+        ("--crf", args.crf is not None),
         ("--preset", args.preset != "medium"),
     ]
     extra = [name for name, present in flag_names if present]
@@ -497,7 +573,9 @@ def _cmd_report(args: argparse.Namespace) -> None:
                     file_lines = file_lines[-max_lines:]
                 else:
                     if raw_count != deduped_count:
-                        lines.append(f"[{raw_count} lines, deduped to {deduped_count}]\n")
+                        lines.append(
+                            f"[{raw_count} lines, deduped to {deduped_count}]\n"
+                        )
                 for line in file_lines:
                     lines.append(line + "\n")
             else:
@@ -615,6 +693,176 @@ def _cmd_replace(args: argparse.Namespace, console: Console) -> None:
         )
 
 
+def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
+    """Run VMAF evaluation and recommend optimal CRF for each file (no encoding)."""
+    # --- Detect or force encoder ---
+    if args.cpu:
+        encoder = Encoder(name="libx265", is_hardware=False, label="CPU (libx265)")
+    else:
+        encoder = detect_encoder()
+    hw_note = ""
+    if args.cpu:
+        hw_note = " [dim](--cpu forced)[/]"
+    elif not encoder.is_hardware:
+        hw_note = " [yellow](no hardware encoder detected)[/]"
+
+    logger.info(
+        f"vmaf-eval: encoder={encoder.name}  target_vmaf={args.vmaf}"
+        f"  preset={args.preset}"
+    )
+    parts = [f"[bold green]{encoder.label}[/]{hw_note}"]
+    parts.append(f"VMAF target [green]{args.vmaf}[/]")
+    parts.append(f"preset [green]{args.preset}[/]")
+    console.print(" ".join(parts))
+    console.print(f"[dim]log: {LOG_FILE}[/]")
+    console.print()
+
+    # --- Find files ---
+    video_files = find_video_files(args.paths, console)
+    if not video_files:
+        console.print("no video files found.")
+        sys.exit(0)
+
+    console.print(f"found {len(video_files)} video files")
+
+    # --- Probe ---
+    probe_results = probe_files(video_files, console=console)
+    if not probe_results:
+        console.print("[yellow]no valid video files found after probing.[/]")
+        sys.exit(0)
+
+    # --- Filter out already-h265 files ---
+    to_evaluate = [pr for pr in probe_results if not pr.is_h265]
+    skipped_h265 = [pr for pr in probe_results if pr.is_h265]
+
+    if skipped_h265:
+        console.print()
+        for pr in skipped_h265:
+            console.print(f"  skip  {pr.path.name}  (already h265)")
+
+    if not to_evaluate:
+        if skipped_h265:
+            console.print()
+            console.print("nothing to evaluate (all files are already h265).")
+        else:
+            console.print("nothing to evaluate.")
+        return
+
+    if args.dry_run:
+        console.print("would evaluate:")
+        for pr in to_evaluate:
+            console.print(f"  {pr.path.name}")
+        return
+
+    # --- Run VMAF evaluation (parallel) ---
+    from rich.progress import (
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+    )
+
+    n_probe = len(to_evaluate)
+
+    # Cap VMAF parallelism to avoid thrashing on CPU-bound ffmpeg encodes.
+    # Respect H265IFY_VMAF_WORKERS env var for advanced tuning.
+    env_workers = os.environ.get("H265IFY_VMAF_WORKERS")
+    if env_workers is not None:
+        try:
+            probe_workers = int(env_workers)
+        except ValueError:
+            console.print(
+                f"  [yellow]warning:[/] H265IFY_VMAF_WORKERS='{env_workers}'"
+                " is not an integer, using default"
+            )
+            probe_workers = min(os.cpu_count() or 4, 4)
+    else:
+        probe_workers = min(os.cpu_count() or 4, 4)
+    probe_lock = threading.Lock()
+    results: dict[Path, int] = {}
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        console=console,
+        transient=False,
+    ) as progress:
+        task = progress.add_task(
+            f"VMAF evaluation ({n_probe} file(s), target: {args.vmaf})…",
+            total=None,
+        )
+
+        _vmaf_completed = 0
+
+        def _probe_done(msg: str) -> None:
+            """Callback from determine_crf for live progress updates."""
+            progress.update(task, description=msg)
+
+        def _eval_one(pr: ProbeResult) -> tuple[ProbeResult, int]:
+            nonlocal _vmaf_completed
+            lines: list[str] = []
+            crf = determine_crf(
+                pr.path,
+                pr,
+                encoder,
+                target_vmaf=args.vmaf,
+                preset=args.preset,
+                output_lines=lines,
+                progress_callback=_probe_done,
+            )
+            with probe_lock:
+                _vmaf_completed += 1
+                progress.update(
+                    task,
+                    description=f"VMAF evaluation ({n_probe} file(s), target: {args.vmaf})…",
+                )
+                console.print(f"  [{_vmaf_completed}/{n_probe}] {pr.path.name}")
+                for line in lines:
+                    console.print(line)
+            return pr, crf
+
+        interrupted = False
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=probe_workers)
+        try:
+            fut_to_pr = {executor.submit(_eval_one, pr): pr for pr in to_evaluate}
+            for future in concurrent.futures.as_completed(fut_to_pr):
+                pr, crf = future.result()
+                results[pr.path] = crf
+                logger.info(f"vmaf-eval: {pr.path.name} -> CRF {crf}")
+        except KeyboardInterrupt:
+            interrupted = True
+            console.print("\n  [yellow]interrupted, terminating VMAF probes\u2026[/]")
+            kill_all_vmaf_procs()
+        finally:
+            # wait=True is safe now: subprocesses are killed above on interrupt,
+            # or completed normally; threads finish promptly either way.
+            executor.shutdown(wait=True, cancel_futures=True)
+
+    # --- Summary ---
+    if interrupted or not results:
+        if results:
+            console.print()
+            console.print("  [yellow]VMAF evaluation stopped (partial results)[/]")
+        else:
+            console.print()
+            console.print("  [yellow]VMAF evaluation stopped[/]")
+        sys.exit(130)
+
+    console.print()
+    crf_values = list(results.values())
+    min_crf, max_crf = min(crf_values), max(crf_values)
+    console.print("[bold]VMAF evaluation complete.[/]")
+    if min_crf == max_crf:
+        console.print(f"  all files: CRF [bold]{min_crf}[/]")
+    else:
+        console.print(f"  CRF range: {min_crf} \u2013 {max_crf}")
+    console.print()
+    for pr in to_evaluate:
+        crf = results[pr.path]
+        console.print(f"  [green]{pr.path.name}[/] \u2192 CRF [bold]{crf}[/]")
+    console.print()
+    console.print("  [dim]Use --crf <N> to encode with your chosen value.[/]")
+
+
 def _cmd_encode(args: argparse.Namespace, console: Console) -> None:
     """Run the encoding pipeline."""
     # --- Detect or force encoder ---
@@ -628,14 +876,16 @@ def _cmd_encode(args: argparse.Namespace, console: Console) -> None:
     elif not encoder.is_hardware:
         hw_note = " [yellow](no hardware encoder detected)[/]"
 
+    crf_display = str(args.crf)
+    logger_crf = str(args.crf)
     logger.info(
-        f"encoder={encoder.name}  crf={args.crf}  preset={args.preset}"
+        f"encoder={encoder.name}  crf={logger_crf}  preset={args.preset}"
         + (f"  resize={args.resize}" if args.resize else "")
         + ("  yolo" if args.yolo else "")
         + ("  reencode-audio" if args.reencode_audio else "")
     )
     parts = [f"[bold green]{encoder.label}[/]{hw_note}"]
-    parts.append(f"CRF [green]{args.crf}[/]")
+    parts.append(f"CRF [green]{crf_display}[/]")
     parts.append(f"preset [green]{args.preset}[/]")
     if args.resize:
         parts.append(f"resize [cyan]{args.resize}[/]")
