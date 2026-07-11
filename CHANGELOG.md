@@ -5,6 +5,43 @@ All notable changes to h265ify will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-11
+
+### Added
+
+- **`--vmaf` flag.** Measures perceptual quality (VMAF) at CRF values 18, 23, 28,
+  33 on a 60-second sample, fits a linear regression, and recommends the optimal
+  CRF for each file — no encoding performed. Probes run in parallel across all
+  files.
+- `--vmaf` accepts an optional target score (default 95, range 0–100).
+- `vmaf.py` module with `determine_crf()`, `_fit_crf()` linear regression,
+  `vmaf_available()` libvmaf detection, and `kill_all_vmaf_procs()` for clean
+  SIGINT handling.
+- `pix_fmt_for_encoder()` helper in `hardware.py` shared between encode and
+  VMAF probe paths, eliminating duplicated pix_fmt logic.
+- `H265IFY_VMAF_WORKERS` env var to cap VMAF probe parallelism (default:
+  `min(cpu_count, 4)`).
+- `H265IFY_PROBE_THREADS` env var to override ffprobe thread count.
+- Retry loop now uses exponential backoff (1s, 2s) between attempts.
+- Per-job CRF override field on `EncodeJob` (`crf: int | None`).
+
+### Changed
+
+- `--crf` default changed from `23` to `None` to distinguish "not passed" from
+  "explicitly set to 23". CRF falls back to 23 only in encode mode.
+- `--vmaf` is mutually exclusive with `--replace`, `--yolo`, and all encoding
+  flags (`--crf`, `--resize`, `--reencode-audio`, `--format`, etc.).
+- Probe executor refactored to `try/finally` pattern for cleaner interrupt
+  handling.
+- Skip messages in encode mode are now a compact summary line when there are
+  jobs to encode (e.g. `"  skip 1 file(s) (1 output exists)"`).
+
+### Fixed
+
+- `--report` flag check now correctly detects `--crf` presence using
+  `is not None` instead of `!= 23`, which broke when the default changed to
+  `None`.
+
 ## [0.5.0] - 2026-07-05
 
 ### Added
@@ -23,8 +60,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `--permanent` without `--yolo` or `--replace` is now caught with a clear error (it had no effect).
 - `--permanent` with `--dry-run` / `--noop` is now caught with a clear error (nothing is changed).
-
-## Unreleased
 
 ## [0.4.0] - 2026-07-04
 
@@ -113,7 +148,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rich-based colorful console output with per-file results and final summary.
 - Sequential encoding (one file at a time) to avoid splitting hardware encoder throughput.
 
-[0.5.0]: https://github.com/JoshPaulie/h265ify/compare/v0.4.2...v0.5.0
+[0.6.0]: https://github.com/JoshPaulie/h265ify/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/JoshPaulie/h265ify/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/JoshPaulie/h265ify/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/JoshPaulie/h265ify/compare/v0.3.0...v0.3.1
 [0.2.2]: https://github.com/JoshPaulie/h265ify/compare/v0.2.1...v0.2.2
