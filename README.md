@@ -36,6 +36,8 @@ hy --resize 720p video.mkv  # shrink to 720p, preserving aspect ratio
 
 hy --preset fast video.mkv    # faster encoding, slightly larger file
 hy --cpu video.mkv            # force CPU encoding for better compression
+hy --vmaf video.mkv            # evaluate and recommend optimal CRF using VMAF (no encode)
+hy --vmaf 93 video.mkv         # evaluate with custom VMAF target
 ```
 
 Already-h265 files are skipped automatically.
@@ -54,7 +56,8 @@ Output is mp4 by default. Files already in mp4, mkv, or mov keep their original 
 
 | Flag               | Short | Description |
 | ------------------ | ----- | ----------- |
-| `--crf`            |       | Quality, 0–51. Lower = better. Default 23. Mapped to native scale for hardware encoders. |
+| `--crf`            |       | Quality, 0–51. Lower = better. Default 23. Mapped to native scale for hardware encoders. Mutually exclusive with `--vmaf`. |
+| `--vmaf`           |       | Evaluate and recommend optimal CRF using VMAF perceptual quality metric (no encoding). Probes short samples at several CRF values to find the one that hits the target VMAF. Mutually exclusive with `--crf`. |
 | `--preset`         |       | Speed/efficiency: `ultrafast` … `veryslow`. Default `medium`. Faster = bigger file, slower = smaller. Mapped to hardware equivalents. |
 | `--cpu`            |       | Force software encoding (libx265). Slower but better compression than hardware. |
 | `--resize`         | `-r`  | Shrink output: `720p`, `1080p`, `4k`, or exact `1280x720`. Maintains aspect ratio. |
@@ -101,6 +104,75 @@ Output is mp4 by default. Files already in mp4, mkv, or mov keep their original 
 | veryslow             | veryslow  | p7    | veryslow | quality  |
 
 VideoToolbox does not have a speed preset - it always uses max-quality mode.
+
+## VMAF evaluation (`--vmaf`)
+
+Instead of guessing a CRF value, use `--vmaf` to let the tool measure actual
+perceptual quality and recommend the optimal CRF for each file — no encoding
+required.
+
+### How it works
+
+1. **Sample** — extracts 60 seconds from the 25% mark of the video (stream
+   copy, no quality loss). This avoids studio logos, title sequences, and
+   end credits that would skew the quality assessment.
+2. **Probe encode** — encodes the sample at CRF 18, 23, 28, 33 using the
+   same encoder and preset as a real encode would use.
+3. **Measure VMAF** — runs ffmpeg's libvmaf filter to score each probe
+   encode against the original.
+4. **Fit and select** — fits a linear regression to the (CRF, VMAF) pairs,
+   then predicts the CRF that achieves the target VMAF.
+
+All files probe in parallel. Results are printed atomically per-file:
+
+```
+$ hy --vmaf 95 ~/Videos/
+  [1/3] video1.mkv
+  probing CRF with VMAF (target: 95.0)...
+    testing CRF 18... VMAF 96.8  (2s)
+    testing CRF 23... VMAF 96.1  (2s)
+    testing CRF 28... VMAF 94.9  (2s)
+    testing CRF 33... VMAF 93.1  (2s)
+    CRF 18: VMAF 96.8  CRF 23: VMAF 96.1  CRF 28: VMAF 94.9  CRF 33: VMAF 93.1
+  selected CRF 26 (target VMAF 95.0)
+
+  [2/3] video2.mkv
+  ...
+
+VMAF evaluation complete.
+  CRF range: 24 – 30
+
+  video1.mkv → CRF 26
+  video2.mkv → CRF 24
+  video3.mkv → CRF 30
+
+  Use --crf <N> to encode with your chosen value.
+```
+
+No encoding is performed. Use the recommended CRF with `--crf`:
+
+```bash
+hy --crf 26 ~/Videos/
+```
+
+### Requirements
+
+`--vmaf` requires ffmpeg compiled with `--enable-libvmaf`. Check with:
+```bash
+ffmpeg -filters | grep libvmaf
+```
+
+### Target VMAF guide
+
+| Target | Quality | Typical CRF | Use case |
+| ------ | ------- | ----------- | -------- |
+| 97+    | Excellent | 14–18     | Archival, may increase file size |
+| 95     | Near-transparent | 20–28 | **Default.** Visually lossless for most content |
+| 90–93  | Good | 28–35        | Mobile/portable, noticeable on large screens |
+| < 90   | Fair | 35+           | Minimal size, visible artifacts |
+
+> Actual CRF values vary by content. Animation and screen recordings achieve
+> higher VMAF at the same CRF compared to live-action.
 
 ## Hardware detection
 

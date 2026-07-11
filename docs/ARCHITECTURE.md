@@ -190,14 +190,99 @@ auto-skip logic, halt-on-increase"]
     Probe["probe.py
 ffprobe wrapper,
 metadata extraction"]
+    Vmaf["vmaf.py
+VMAF-based auto-CRF
+(Libvmaf probing,
+linear regression fit)"]
 
     Init --> Encoder
     Init --> Pipeline
     Init --> Hardware
+    Init --> Vmaf
     Pipeline --> Encoder
     Pipeline --> Probe
+    Pipeline --> Vmaf
     Pipeline --> Logger
     Hardware --> Encoder
 ```
+
+## VMAF evaluation mode (`--vmaf`)
+
+`--vmaf` is a standalone evaluation mode (mutually exclusive with `--replace`,
+`--yolo`, and encoding flags). It probes each file to find the optimal CRF for
+a target VMAF score, then reports the results — no encoding is performed.
+
+### VMAF probing flow
+
+```mermaid
+flowchart TD
+    Start["--vmaf set?"]
+    SkipProbe["skip"]
+    Extract["_extract_segment
+60s from 25% mark (stream copy)
+to temp file
+avoids titles / credits"]
+    ProbeSeg["probe segment
+(ffprobe for pix_fmt,
+bit depth)"]
+    Loop["for each candidate CRF
+18, 23, 28, 33:"]
+    EncodeSeg["encode segment
+(medium preset by default,
+respects --preset and --cpu)"]
+    EarlyStop{"VMAF < target
+and ≥ 2 data points?"}
+    Vmaf["_compute_vmaf_score
+ffmpeg libvmaf filter
+JSON output"]
+    Store["store (CRF, VMAF) pair"]
+    Refine{"all on one side
+of target?"}
+    ProbeExtra["probe one more CRF
+38 (above) or 13 (below)"]
+    Fit["_fit_crf
+linear regression
+VMAF = a·CRF + b
+solve for target"]
+    Report["print recommended CRF
+per file
+no encoding"]
+
+    Start -->|no| SkipProbe
+    Start -->|yes| Extract --> ProbeSeg --> Loop
+    Loop --> EncodeSeg --> Vmaf --> Store
+    Store --> EarlyStop
+    EarlyStop -->|no, continue| Loop
+    EarlyStop -->|yes, bracketed| Fit
+    Loop -->|all 4 done| Refine
+    Refine -->|extreme| ProbeExtra --> Fit
+    Refine -->|bracketed| Fit
+    Fit --> Report
+```
+
+### Key design decisions
+
+- **Evaluation only**: no encoding happens after probing. The user gets a
+  recommended CRF and decides what to do with it.
+- **Same encoder and preset**: probe encodes use the user's chosen `--preset`
+  and `--cpu` setting, matching real encode conditions.
+- **Parallel probing**: all files probe concurrently using a thread pool.
+  Results are printed atomically per-file.
+- **Early stop**: probing stops as soon as a VMAF score falls below the
+  target, since we have a bracket.
+
+### Design decisions
+
+- **60-second sample from the 25% mark**: avoids studio logos, title
+  sequences, and end credits that don't represent the video's typical content.
+- **For short videos (< 120s)**: samples from the beginning since there's no
+  risk of unrepresentative introductory content.
+- **Per-file probing**: each file gets its own CRF. Content complexity varies
+  wildly — a CRF that works for animation may overshoot for live-action.
+- **Linear regression**: VMAF and CRF have an approximately linear relationship
+  in the useful range (CRF 18–35, VMAF ~98–85). Simple least-squares fit
+  works better than binary search because VMAF measurements have some noise.
+- **Same preset as real encode**: the probe encodes use the user's `--preset`
+  (not hardcoded `veryfast`), so VMAF measurements reflect actual quality.
 
 Each module uses `from __future__ import annotations`, dataclasses for structured data, and `pathlib.Path` exclusively.
