@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import platform
+import random
 import re
 import sys
 from importlib.metadata import version
@@ -78,6 +79,8 @@ examples:
   h265ify --cpu video.mkv          force software encoding (libx265)
   h265ify --vmaf 95 video.mkv      evaluate and recommend optimal CRF using VMAF (no encode)
   h265ify --vmaf 93 ~/Videos/      evaluate all videos with custom VMAF target
+  h265ify --vmaf 95 --sample 5     evaluate a random sample of 5 files
+  h265ify --vmaf 95 --sample 25%   evaluate a random 25%% of files
 """,
     )
 
@@ -110,6 +113,12 @@ examples:
         "metric (no encoding). Probes each file at several CRF values, measures "
         "VMAF, and reports the CRF that achieves the target score (default: 95). "
         "Mutually exclusive with --crf and other encoding options.",
+    )
+    encoding.add_argument(
+        "--sample",
+        type=str,
+        metavar="N|N%",
+        help="randomly sample N files or N%% for --vmaf evaluation",
     )
     encoding.add_argument(
         "--resize",
@@ -269,6 +278,10 @@ def _run(args: argparse.Namespace, console: Console, err_console: Console) -> No
         )
         sys.exit(1)
 
+    # --- --sample without --vmaf is a no-op ---
+    if args.sample is not None and args.vmaf is None:
+        err_console.print("[yellow]warning:[/] --sample has no effect without --vmaf")
+
     # --- VMAF evaluation mode ---
     if args.vmaf is not None:
         # ── Mutually exclusive with encoding flags ──
@@ -304,6 +317,44 @@ def _run(args: argparse.Namespace, console: Console, err_console: Console) -> No
             )
             sys.exit(1)
 
+        # --- Validate --sample format ---
+        if args.sample is not None:
+            raw = args.sample.strip()
+            if raw.endswith("%"):
+                pct_str = raw[:-1]
+                if not pct_str:
+                    err_console.print(
+                        f"[red]error:[/] invalid --sample value {args.sample!r}"
+                    )
+                    sys.exit(1)
+                try:
+                    pct = float(pct_str)
+                except ValueError:
+                    err_console.print(
+                        f"[red]error:[/] invalid --sample value {args.sample!r}"
+                    )
+                    sys.exit(1)
+                if not (0 < pct <= 100):
+                    err_console.print(
+                        "[red]error:[/] --sample percentage must be > 0 and ≤ 100"
+                    )
+                    sys.exit(1)
+                args.sample = ("pct", pct / 100.0)
+            else:
+                try:
+                    n = int(raw)
+                except ValueError:
+                    err_console.print(
+                        f"[red]error:[/] invalid --sample value {args.sample!r}"
+                    )
+                    sys.exit(1)
+                if n <= 0:
+                    err_console.print(
+                        "[red]error:[/] --sample must be a positive integer"
+                    )
+                    sys.exit(1)
+                args.sample = ("count", n)
+
         _cmd_vmaf(args, console)
         return
 
@@ -323,6 +374,8 @@ def _run(args: argparse.Namespace, console: Console, err_console: Console) -> No
             ignored.append("--reencode-audio")
         if args.output_format:
             ignored.append("--format")
+        if args.sample is not None:
+            ignored.append("--sample")
         if ignored:
             err_console.print(
                 f"[yellow]note:[/] --replace does no encoding; "
@@ -706,13 +759,26 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
     elif not encoder.is_hardware:
         hw_note = " [yellow](no hardware encoder detected)[/]"
 
+    sample_note = ""
+    if args.sample is not None:
+        stype, sval = args.sample
+        if stype == "pct":
+            sample_note = f"  sample={sval*100:.0f}%"
+        else:
+            sample_note = f"  sample={sval}"
+
     logger.info(
         f"vmaf-eval: encoder={encoder.name}  target_vmaf={args.vmaf}"
-        f"  preset={args.preset}"
+        f"  preset={args.preset}{sample_note}"
     )
     parts = [f"[bold green]{encoder.label}[/]{hw_note}"]
     parts.append(f"VMAF target [green]{args.vmaf}[/]")
     parts.append(f"preset [green]{args.preset}[/]")
+    if args.sample is not None:
+        if stype == "pct":
+            parts.append(f"sample [cyan]{sval*100:.0f}%[/]")
+        else:
+            parts.append(f"sample [cyan]{sval}[/]")
     console.print(" ".join(parts))
     console.print(f"[dim]log: {LOG_FILE}[/]")
     console.print()
@@ -747,6 +813,22 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
         else:
             console.print("nothing to evaluate.")
         return
+
+    # --- Random sampling (--sample) ---
+    if args.sample is not None:
+        sample_type, sample_value = args.sample
+        total_eligible = len(to_evaluate)
+        if sample_type == "pct":
+            sample_count = max(1, int(total_eligible * sample_value))
+        else:
+            sample_count = sample_value
+        sample_count = min(sample_count, total_eligible)
+
+        if sample_count < total_eligible:
+            to_evaluate = random.sample(to_evaluate, sample_count)
+            console.print(
+                f"  random sample: {sample_count} of {total_eligible} eligible files"
+            )
 
     if args.dry_run:
         console.print("would evaluate:")
