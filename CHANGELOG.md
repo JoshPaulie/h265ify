@@ -5,6 +5,14 @@ All notable changes to h265ify will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`--sample` flag** for use with `--vmaf`. Accepts an integer (randomly sample N
+  files) or a percentage string like `25%` (randomly sample N% of eligible files).
+  Sampling happens after h265 filtering, so only non-h265 files are candidates.
+
 ## [0.6.0] - 2026-07-11
 
 ### Added
