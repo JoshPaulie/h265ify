@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   files) or a percentage string like `25%` (randomly sample N% of eligible files).
   Sampling happens after h265 filtering, so only non-h265 files are candidates.
 
+### Changed
+
+- VMAF evaluation segment shortened from 60s to 30s, halving CRF probe times.
+
 ## [0.6.0] - 2026-07-11
 
 ### Added

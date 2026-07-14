@@ -28,6 +28,9 @@ _CANDIDATE_CRFS = [18, 23, 28, 33]
 # Default target VMAF score (95 = near-transparent, indistinguishable from source).
 _DEFAULT_TARGET_VMAF = 95.0
 
+# Duration of the extracted test segment (seconds). Shorter = faster probes.
+_SEGMENT_DURATION = 30.0
+
 # ── PID tracking for KeyboardInterrupt-safe subprocess cleanup ──
 _VMAF_PROCS: dict[int, subprocess.Popen[str]] = {}
 _VMAF_PROCS_LOCK = threading.Lock()
@@ -105,11 +108,12 @@ def vmaf_available() -> bool:
 def _extract_segment(input_path: Path, duration: float, output_path: Path) -> bool:
     """Extract a representative segment from the video.
 
-    Samples 60 seconds from the 25% mark (well past opening titles/credits)
-    for videos >= 120 seconds.  Shorter videos start from the beginning.
+    Samples ``_SEGMENT_DURATION`` seconds from the 25% mark (well past opening
+    titles/credits) for videos >= ``_SEGMENT_DURATION * 4`` seconds.
+    Shorter videos start from the beginning.
     Uses stream copy so no quality is lost.
     """
-    segment_duration = min(60.0, duration) if duration > 0 else 60.0
+    segment_duration = min(_SEGMENT_DURATION, duration) if duration > 0 else _SEGMENT_DURATION
 
     # Start at 25% into the video to avoid unrepresentative content like
     # studio logos, title sequences, or end credits.
