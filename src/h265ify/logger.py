@@ -18,6 +18,8 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import random
+import string
 import sys
 import traceback
 from pathlib import Path
@@ -51,10 +53,42 @@ LOG_FILE: Path = LOG_DIR / "h265ify.log"
 FFMPEG_LOG_FILE: Path = LOG_DIR / "h265ify_ffmpeg.log"
 ERROR_LOG_FILE: Path = LOG_DIR / "h265ify_error.log"
 
+# --- Session tag ---
+_session_tag: str = ""
+
+
+def set_session_tag(tag: str) -> None:
+    """Set the session tag for the current invocation."""
+    global _session_tag
+    _session_tag = tag
+
+
+def get_session_tag() -> str:
+    """Return the current session tag (empty string if unset)."""
+    return _session_tag
+
+
+def generate_tag() -> str:
+    """Generate a 6-character alphanumeric tag (a-z, A-Z, 0-9)."""
+    return "".join(random.choices(string.ascii_letters + string.digits, k=6))
+
 # --- Main application logger ---
 logger: logging.Logger = logging.getLogger("h265ify")
 logger.setLevel(logging.DEBUG)
 logger.propagate = False  # don't bubble to the root logger
+
+
+class SessionFormatter(logging.Formatter):
+    """Formatter that injects the session tag into the log record.
+
+    When a session tag is set via :func:`set_session_tag`, every log line
+    includes ``[TAG] `` between the level name and the message body.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        tag = _session_tag
+        record.tag = f"[{tag}] " if tag else ""
+        return super().format(record)
 
 
 def _setup_logger() -> None:
@@ -62,8 +96,8 @@ def _setup_logger() -> None:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         _handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
         _handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s  %(levelname)-8s  %(message)s",
+            SessionFormatter(
+                "%(asctime)s  %(levelname)-8s  %(tag)s%(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S",
             )
         )
@@ -89,6 +123,7 @@ def _log_exception(
             _f.write(
                 f"{'=' * 72}\n"
                 f"Timestamp: {_dt.datetime.now().isoformat()}\n"
+                f"Session tag: [{_session_tag}]\n"
                 f"Exception: {exc_type.__name__}: {exc_value}\n"
             )
             if exc_tb is not None:
