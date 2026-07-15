@@ -51,6 +51,7 @@ class EncodeJob:
     input_path: Path
     probe_result: ProbeResult
     crf: int | None = None  # per-job CRF override (set by --auto)
+    display_name: str | None = None  # trimmed name for narrow displays
 
 
 @dataclass
@@ -64,6 +65,46 @@ class EncodeResult:
     input_size: int
     output_size: int
     skipped: bool = False  # encode succeeded but output was larger than input
+
+
+def compute_display_names(paths: list[Path]) -> dict[Path, str]:
+    """Compute display names with the common prefix trimmed for narrow displays.
+
+    When a batch of files shares a long common prefix (e.g., TV show episodes),
+    trimming it produces much shorter names that fit better on narrow terminals:
+
+        The Chair Company - S01E01 - Pilot.mkv  →  01 - Pilot.mkv
+        The Chair Company - S01E02 - Episode 2.mkv  →  02 - Episode 2.mkv
+        The Chair Company - S01E03 - Conclusion.mkv  →  03 - Conclusion.mkv
+
+    Files that don't share a meaningful prefix retain their original names.
+    A single file always keeps its full name.
+    """
+    if len(paths) <= 1:
+        return {p: p.name for p in paths}
+
+    names = [p.name for p in paths]
+    prefix = os.path.commonprefix(names)
+
+    # Only trim if the prefix is long enough to be meaningful
+    # (at least 8 chars and at least 25% of average name length)
+    avg_len = sum(len(n) for n in names) / len(names)
+    if len(prefix) < 8 or len(prefix) / avg_len < 0.25:
+        return {p: p.name for p in paths}
+
+    # Check all trimmed results are reasonable before committing
+    result: dict[Path, str] = {}
+    all_ok = True
+    for p in paths:
+        display = p.name.removeprefix(prefix)
+        if not display or display == p.suffix or len(display) < 5:
+            all_ok = False
+            break
+        result[p] = display
+
+    if not all_ok:
+        return {p: p.name for p in paths}
+    return result
 
 
 def _is_video_file(p: Path) -> bool:
@@ -291,7 +332,8 @@ def run_pipeline(
             output = get_output_path(job.input_path, replace, output_format)
             input_size = job.probe_result.file_size
             size_str = f" ({format_size(input_size)})" if input_size > 0 else ""
-            console.print(f"  {job.input_path.name}{size_str}")
+            _name = job.display_name or job.input_path.name
+            console.print(f"  {_name}{size_str}")
             logger.info(f"dry-run: {job.input_path.name} → {output.name}")
             results.append(
                 EncodeResult(
@@ -351,7 +393,7 @@ def run_pipeline(
                 if current_file is not None:
                     progress.remove_task(current_file)
                 current_file = progress.add_task(
-                    f"  {job.input_path.name}",
+                    f"  {job.display_name or job.input_path.name}",
                     total=100,
                     suffix="starting…",
                 )
@@ -673,6 +715,7 @@ def run_replace(
     console: Console,
     dry_run: bool = False,
     permanent: bool = False,
+    display_names: dict[Path, str] | None = None,
 ) -> tuple[int, int]:
     """Replace original files with their _h265 counterparts.
 
@@ -688,7 +731,9 @@ def run_replace(
         # New name: original stem + _h265 file's extension
         new_path = pair.original_path.with_suffix(pair.h265_path.suffix)
 
-        console.print(f"  {pair.original_path.name}  ←  {pair.h265_path.name}")
+        _orig = (display_names or {}).get(pair.original_path, pair.original_path.name)
+        _h265 = (display_names or {}).get(pair.h265_path, pair.h265_path.name)
+        console.print(f"  {_orig}  ←  {_h265}")
         if dry_run:
             logger.info(
                 f"dry-run replace: {pair.original_path.name} ← {pair.h265_path.name}"
