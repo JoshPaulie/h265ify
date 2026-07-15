@@ -1,17 +1,21 @@
 """VMAF-based auto-CRF detection for optimal encoding quality.
 
 Uses ffmpeg's libvmaf filter to measure perceptual quality at several CRF
-values on a short sample, then fits a curve to find the CRF that achieves a
+values on short sample clips, then fits a curve to find the CRF that achieves a
 target VMAF score (default 95, near-transparent quality).
+
+Multiple clips are extracted from different scenes (via ffmpeg's scdet filter)
+and the *minimum* VMAF across clips is used for each CRF, ensuring the hardest
+sampled scene drives the recommendation.
 """
 
 from __future__ import annotations
 
+import functools
 import json
+import re
 import subprocess
 import tempfile
-import threading
-import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -28,15 +32,20 @@ _CANDIDATE_CRFS = [18, 23, 28, 33]
 # Default target VMAF score (95 = near-transparent, indistinguishable from source).
 _DEFAULT_TARGET_VMAF = 95.0
 
-# Duration of the extracted test segment (seconds). Shorter = faster probes.
-_SEGMENT_DURATION = 30.0
+# Duration of each extracted test clip (seconds).  Multiple short clips from
+# different scenes give better coverage of content complexity than a single
+# longer segment.
+_CLIP_DURATION = 8.0
 
-# ── PID tracking for KeyboardInterrupt-safe subprocess cleanup ──
-_VMAF_PROCS: dict[int, subprocess.Popen[str]] = {}
-_VMAF_PROCS_LOCK = threading.Lock()
-_VMAF_ABORTED = (
-    threading.Event()
-)  # set on KeyboardInterrupt to prevent new subprocesses
+# Number of sample clips to extract for VMAF evaluation across the video.
+_NUM_CLIPS = 3
+
+# Timeout for the full-video scene-detection pass (seconds).
+# At ~15x realtime for a 360p scan, a 2.5h movie takes ~10 minutes.
+_SCENE_DETECT_TIMEOUT = 600.0
+
+# Regex for parsing ffmpeg scdet filter output.
+_SCENE_RE = re.compile(r"lavfi\.scd\.score:\s*([\d.]+),\s*lavfi\.scd\.time:\s*([\d.]+)")
 
 
 def _ffmpeg_run(
@@ -44,53 +53,189 @@ def _ffmpeg_run(
     timeout: float | None = None,
     cwd: str | Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Like subprocess.run but tracks PIDs for interrupt-safe cleanup.
-
-    When ``_VMAF_ABORTED`` is set (KeyboardInterrupt), returns a fake
-    failure immediately instead of spawning a new subprocess.  This
-    prevents worker threads from launching new ffmpeg processes after
-    the interrupt handler has already begun cleanup.
-    """
-    if _VMAF_ABORTED.is_set():
-        return subprocess.CompletedProcess(cmd, -1, "", "aborted")
-
-    proc = subprocess.Popen(
+    """Run a subprocess and return the result."""
+    return subprocess.run(
         cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
+        timeout=timeout,
         cwd=cwd,
     )
-    with _VMAF_PROCS_LOCK:
-        _VMAF_PROCS[proc.pid] = proc
+
+
+@functools.cache
+def _scdet_available() -> bool:
+    """Return True if ffmpeg has the scdet filter."""
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-        return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
-    except BaseException:
-        proc.terminate()
-        raise
-    finally:
-        with _VMAF_PROCS_LOCK:
-            _VMAF_PROCS.pop(proc.pid, None)
+        result = subprocess.run(
+            ["ffmpeg", "-filters"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return "scdet" in result.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
 
 
-def kill_all_vmaf_procs() -> None:
-    """Terminate all tracked VMAF subprocesses (called on KeyboardInterrupt).
+def _run_scdet(input_path: Path) -> list[float]:
+    """Run ffmpeg scdet and return sorted scene-change timestamps.
 
-    Sets ``_VMAF_ABORTED`` first so any subsequent ``_ffmpeg_run`` calls
-    in worker threads short-circuit immediately without spawning new
-    subprocesses.
+    Returns an empty list if detection fails for any reason.
     """
-    _VMAF_ABORTED.set()
-    with _VMAF_PROCS_LOCK:
-        for proc in list(_VMAF_PROCS.values()):
-            try:
-                proc.terminate()
-            except OSError:
-                pass
-        _VMAF_PROCS.clear()
+    cmd: list[str] = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-i",
+        str(input_path),
+        "-vf",
+        "scale=-2:360,scdet=threshold=10",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        result = _ffmpeg_run(cmd, timeout=_SCENE_DETECT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return []
+    if result.returncode != 0:
+        return []
+
+    # Parse lavfi.scd.score / lavfi.scd.time lines from stderr
+    timestamps: list[float] = []
+    for line in result.stderr.splitlines():
+        m = _SCENE_RE.search(line)
+        if m:
+            score = float(m.group(1))
+            ts = float(m.group(2))
+            if score > 10.0:
+                timestamps.append(ts)
+
+    if not timestamps:
+        return []
+    timestamps.sort()
+
+    # Group detections within 1-second windows (same scene change event)
+    grouped: list[float] = [timestamps[0]]
+    for t in timestamps[1:]:
+        if t - grouped[-1] > 1.0:
+            grouped.append(t)
+    return grouped
 
 
+def _evenly_spaced_clips(
+    duration: float,
+    num_clips: int,
+    clip_duration: float,
+) -> list[float]:
+    """Return evenly-spaced clip start times, avoiding the edges."""
+    margin = clip_duration + 5.0
+    if duration <= margin * 2:
+        return [duration * 0.25]
+    if num_clips <= 1:
+        return [min(margin, duration - clip_duration)]
+    available = duration - 2.0 * margin
+    step = available / (num_clips - 1)
+
+    # Clamp to non-overlapping: each clip start must be at least
+    # *clip_duration* from the previous one so they don't overlap.
+    if step < clip_duration:
+        max_non_overlap = max(1, int(available / clip_duration) + 1)
+        # Recalculate with the reduced clip count
+        if max_non_overlap <= 1:
+            return [margin]
+        step = available / (max_non_overlap - 1)
+        num_clips = max_non_overlap
+
+    return [margin + i * step for i in range(num_clips)]
+
+
+def _pick_clips_from_scenes(
+    scene_times: list[float],
+    duration: float,
+    num_clips: int,
+    clip_duration: float,
+) -> list[float]:
+    """Pick clip start times using scene boundaries to avoid transition frames.
+
+    Divides the video into *num_clips* equal time ranges.  For each range,
+    picks the scene boundary nearest the centre of that range, then places
+    the clip 1s into the new scene.
+    """
+    margin = clip_duration + 2.0
+    if duration <= margin * 2:
+        return [duration * 0.25]
+
+    segment_size = (duration - 2.0 * margin) / num_clips
+    starts: list[float] = []
+
+    for i in range(num_clips):
+        target = margin + segment_size * (i + 0.5)
+
+        # If target lands near a scene boundary, push past it so the clip
+        # doesn't straddle a transition.
+        adjusted = target
+        for t in scene_times:
+            if abs(t - target) < 1.5:
+                adjusted = t + 1.0
+                break
+
+        adjusted = min(adjusted, duration - clip_duration)
+        adjusted = max(0.0, adjusted)
+        starts.append(adjusted)
+
+    return starts
+
+
+def _select_clips(
+    input_path: Path,
+    duration: float,
+    num_clips: int = _NUM_CLIPS,
+    clip_duration: float = _CLIP_DURATION,
+) -> list[float]:
+    """Select representative clip start times using scene detection.
+
+    Uses ffmpeg's ``scdet`` filter to find scene boundaries, then picks
+    *num_clips* clips spread across the video from distinct scenes.
+
+    Falls back to evenly-spaced positions if scdet is unavailable,
+    times out, or returns too few boundaries.
+
+    For very short videos (< *num_clips* \u00d7 *clip_duration* \u00d7 2) a
+    single clip at the legacy 25% position is returned.
+    """
+    # Degenerate param or very short video -- single clip, legacy position
+    if num_clips < 1 or duration < num_clips * clip_duration * 2:
+        return [duration * 0.25 if duration >= 120 else 0.0]
+
+    # Try scene detection
+    scene_times: list[float] = []
+    if _scdet_available():
+        try:
+            scene_times = _run_scdet(input_path)
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            pass
+
+    if len(scene_times) >= num_clips:
+        return _pick_clips_from_scenes(scene_times, duration, num_clips, clip_duration)
+
+    # Fallback: evenly-spaced clips
+    if not scene_times:
+        logger.info(
+            "auto-CRF: scdet unavailable or returned no scene boundaries,"
+            f" using evenly-spaced clips (num_clips={num_clips})"
+        )
+    else:
+        logger.info(
+            "auto-CRF: scdet returned fewer scene boundaries"
+            f" ({len(scene_times)}) than requested clips ({num_clips}),"
+            " using evenly-spaced clips"
+        )
+    return _evenly_spaced_clips(duration, num_clips, clip_duration)
+
+
+@functools.cache
 def vmaf_available() -> bool:
     """Return True if ffmpeg has libvmaf support."""
     try:
@@ -105,23 +250,17 @@ def vmaf_available() -> bool:
         return False
 
 
-def _extract_segment(input_path: Path, duration: float, output_path: Path) -> bool:
-    """Extract a representative segment from the video.
+def _extract_clip(
+    input_path: Path,
+    start_time: float,
+    duration: float,
+    output_path: Path,
+) -> bool:
+    """Extract a video clip starting at *start_time* for *duration* seconds.
 
-    Samples ``_SEGMENT_DURATION`` seconds from the 25% mark (well past opening
-    titles/credits) for videos >= ``_SEGMENT_DURATION * 4`` seconds.
-    Shorter videos start from the beginning.
-    Uses stream copy so no quality is lost.
+    Uses stream copy so no quality is lost.  Only the first video stream
+    is extracted (no audio, no subtitles).
     """
-    segment_duration = min(_SEGMENT_DURATION, duration) if duration > 0 else _SEGMENT_DURATION
-
-    # Start at 25% into the video to avoid unrepresentative content like
-    # studio logos, title sequences, or end credits.
-    if duration >= 120:
-        start_time = duration * 0.25
-    else:
-        start_time = 0.0
-
     cmd: list[str] = [
         "ffmpeg",
         "-y",
@@ -133,11 +272,11 @@ def _extract_segment(input_path: Path, duration: float, output_path: Path) -> bo
         "-i",
         str(input_path),
         "-t",
-        str(segment_duration),
+        str(duration),
         "-c",
         "copy",
         "-map",
-        "0:v:0",  # first video stream only; avoid copying extra streams
+        "0:v:0",
         str(output_path),
     ]
     try:
@@ -157,7 +296,7 @@ def _build_probe_command(
 ) -> list[str]:
     """Build a minimal ffmpeg command for CRF probing.
 
-    Video-only encode — no audio, subtitles, hvc1 tags, or faststart.
+    Video-only encode -- no audio, subtitles, hvc1 tags, or faststart.
     Just the bare minimum to measure quality at a given CRF.
     Uses the same preset as the main encode for accurate quality assessment.
     """
@@ -167,8 +306,7 @@ def _build_probe_command(
         "-hide_banner",
         "-loglevel",
         "error",
-        "-stats",
-    ]
+        ]
     cmd.extend(["-i", str(input_path)])
     cmd.extend(["-map", "0:v:0"])
     cmd.extend(["-c:v", encoder.name])
@@ -252,7 +390,7 @@ def _compute_vmaf_score(reference: Path, distorted: Path) -> float | None:
 def _fit_crf(crf_scores: list[tuple[int, float]], target_vmaf: float) -> int:
     """Find the CRF value that achieves *target_vmaf*.
 
-    Fits a linear regression (VMAF ≈ a × CRF + b) through all measured
+    Fits a linear regression (VMAF \u2248 a \u00d7 CRF + b) through all measured
     points, then solves for CRF.  Clamped to [0, 51].
 
     VMAF and CRF have a roughly linear relationship in the useful range
@@ -264,12 +402,12 @@ def _fit_crf(crf_scores: list[tuple[int, float]], target_vmaf: float) -> int:
     crf_scores.sort(key=lambda x: x[0])
     n = len(crf_scores)
 
-    # All scores above target → use the highest tested CRF (smallest file)
+    # All scores above target \u2192 use the highest tested CRF (smallest file)
     # since even the worst-quality tested CRF still meets the target quality.
     if all(vmaf >= target_vmaf for _, vmaf in crf_scores):
         return crf_scores[-1][0]
 
-    # All scores below target → use the lowest CRF (best quality)
+    # All scores below target \u2192 use the lowest CRF (best quality)
     # since even the best-quality tested CRF is below the target.
     if all(vmaf <= target_vmaf for _, vmaf in crf_scores):
         return crf_scores[0][0]
@@ -296,7 +434,7 @@ def _fit_crf(crf_scores: list[tuple[int, float]], target_vmaf: float) -> int:
         return crf_scores[n // 2][0]
 
     # Near-zero slope: all VMAF scores nearly identical across CRFs.
-    # The regression is unreliable — fall back to median.
+    # The regression is unreliable \u2014 fall back to median.
     if abs(slope) < 0.01:
         logger.warning(
             f"auto-CRF: near-zero slope ({slope:.4f}), VMAF scores"
@@ -308,74 +446,55 @@ def _fit_crf(crf_scores: list[tuple[int, float]], target_vmaf: float) -> int:
     return max(0, min(51, round(predicted)))
 
 
-def _try_probe(
-    crf_scores: list[tuple[int, float]],
+def _probe_crf(
     crf: int,
-    segment: Path,
+    clip_paths: list[Path],
     seg_probe: ProbeResult,
     encoder: Encoder,
     tmp: Path,
     preset: str = "medium",
-    console: Console | None = None,
-    output_lines: list[str] | None = None,
-) -> None:
-    """Probe a single CRF value and append to *crf_scores* if successful."""
-    if _VMAF_ABORTED.is_set():
-        return
-    if any(existing == crf for existing, _ in crf_scores):
-        return
+    progress_callback: Callable[[str], None] | None = None,
+) -> tuple[list[float], float | None]:
+    """Encode all *clip_paths* at *crf* and return per-clip VMAF scores + minimum.
 
-    encoded = tmp / f"crf_{crf}{segment.suffix}"
-    t0 = time.monotonic()
+    Returns (clip_scores, min_score).  *min_score* is None if all encodes or
+    all VMAF computations failed.
+    """
+    clip_scores: list[float] = []
 
-    cmd = _build_probe_command(segment, encoded, seg_probe, encoder, crf, preset=preset)
-    try:
-        proc_result = _ffmpeg_run(cmd, timeout=600)
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        elapsed = time.monotonic() - t0
-        if not _VMAF_ABORTED.is_set():
-            if output_lines is not None:
-                output_lines.append(
-                    f"    testing CRF {crf}... [red]{type(e).__name__}[/]"
-                )
-            elif console:
-                console.print(
-                    f"    testing CRF [cyan]{crf}[/]\u2026 [red]{type(e).__name__}[/]"
-                )
-        logger.warning(f"auto-CRF refinement probe failed for CRF {crf}: {e}")
-        return
-    elapsed = time.monotonic() - t0
+    for i, clip_path in enumerate(clip_paths):
+        encoded = tmp / f"crf_{crf}_clip_{i}{clip_path.suffix}"
 
-    if proc_result.returncode != 0:
-        if not _VMAF_ABORTED.is_set():
-            if output_lines is not None:
-                output_lines.append(f"    testing CRF {crf}... [red]encode failed[/]")
-            elif console:
-                console.print(
-                    f"    testing CRF [cyan]{crf}[/]\u2026 [red]encode failed[/]"
-                )
-        logger.warning(
-            f"auto-CRF refinement probe failed for CRF {crf}:"
-            f" {proc_result.stderr[:200]}"
-        )
-        return
-
-    vmaf_score = _compute_vmaf_score(segment, encoded)
-
-    if vmaf_score is not None:
-        crf_scores.append((crf, vmaf_score))
-        msg = f"    testing CRF {crf}... VMAF [green]{vmaf_score:.1f}[/]  ({elapsed:.0f}s)"
-        if output_lines is not None:
-            output_lines.append(msg)
-        elif console:
-            console.print(msg)
-    else:
-        if output_lines is not None:
-            output_lines.append(f"    testing CRF {crf}... [yellow]VMAF failed[/]")
-        elif console:
-            console.print(
-                f"    testing CRF [cyan]{crf}[/]\u2026 [yellow]VMAF failed[/]"
+        if progress_callback:
+            progress_callback(
+                f"encoding clip {i + 1}/{len(clip_paths)} at CRF {crf}..."
             )
+
+        cmd = _build_probe_command(
+            clip_path, encoded, seg_probe, encoder, crf, preset=preset
+        )
+        try:
+            proc_result = _ffmpeg_run(cmd, timeout=600)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            continue
+
+        if proc_result.returncode != 0:
+            logger.warning(f"auto-CRF probe encode failed for CRF {crf}, clip {i}")
+            continue
+
+        if progress_callback:
+            progress_callback(
+                f"measuring VMAF for clip {i + 1}/{len(clip_paths)} at CRF {crf}..."
+            )
+
+        vmaf_score = _compute_vmaf_score(clip_path, encoded)
+        if vmaf_score is not None:
+            clip_scores.append(vmaf_score)
+
+    if not clip_scores:
+        return [], None
+
+    return clip_scores, min(clip_scores)
 
 
 def determine_crf(
@@ -387,16 +506,18 @@ def determine_crf(
     console: Console | None = None,
     output_lines: list[str] | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    num_clips: int = _NUM_CLIPS,
+    clip_duration: float = _CLIP_DURATION,
 ) -> int:
     """Determine the optimal CRF for a video using VMAF probing.
 
-    Encodes short test segments at several CRF values, measures VMAF
-    against the original, and fits a curve to find the CRF that achieves
-    *target_vmaf*.  Uses the same preset as the main encode for accurate
-    quality assessment.
+    Encodes short test clips (from multiple scenes via scene detection) at
+    several CRF values, measures VMAF against the original, and fits a curve
+    to find the CRF that achieves *target_vmaf*.  The **minimum** VMAF across
+    all clips is used for each CRF, ensuring the hardest sampled scene drives
+    the recommendation.
 
-    The probe sample is taken from the 25% mark of the video to avoid
-    unrepresentative content (studio logos, title sequences, end credits).
+    Uses the same preset as the main encode for accurate quality assessment.
 
     Args:
         input_path: Path to the source video file.
@@ -405,6 +526,8 @@ def determine_crf(
         target_vmaf: Desired VMAF score (0-100, default 95).
         preset: x265-style preset for probe encodes (default "medium").
         console: Optional Rich console for progress output.
+        num_clips: Number of sample clips to extract (default 3).
+        clip_duration: Duration of each sample clip in seconds (default 8).
 
     Returns:
         Optimal CRF integer (0-51).  Falls back to 23 on any failure.
@@ -416,130 +539,125 @@ def determine_crf(
         elif console:
             console.print(msg)
 
-    _out(f"  [dim]probing CRF with VMAF (target: {target_vmaf})\u2026[/]")
-    if progress_callback:
-        progress_callback("extracting test segment\u2026")
+    _out(f"  [dim]probing CRF with VMAF (target: {target_vmaf})...[/]")
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
-        segment = tmp / f"segment{input_path.suffix}"
 
-        # --- Extract a representative segment ---
-        if not _extract_segment(input_path, probe.duration, segment):
-            if not _VMAF_ABORTED.is_set():
+        # --- Select and extract clips ---
+        if progress_callback:
+            progress_callback("detecting scenes...")
+
+        # Warn the user that scdet can take a while on long videos
+        if _scdet_available() and probe.duration >= num_clips * clip_duration * 2:
+            _out(
+                "  [dim]detecting scenes"
+                " (may take a few minutes for long videos)...[/]"
+            )
+
+        start_times = _select_clips(
+            input_path, probe.duration, num_clips, clip_duration
+        )
+        if not start_times:
+            _out(
+                "  [yellow]warning:[/] could not determine any"
+                " suitable clip position, using CRF 23"
+            )
+            return 23
+
+        clip_paths: list[Path] = []
+        for i, st in enumerate(start_times):
+            clip_path = tmp / f"clip_{i}{input_path.suffix}"
+            if not _extract_clip(input_path, st, clip_duration, clip_path):
                 _out(
-                    "  [yellow]warning:[/] could not extract test segment, using CRF 23"
+                    "  [yellow]warning:[/] could not extract"
+                    f" test clip {i}, using CRF 23"
                 )
-                logger.warning("auto-CRF: segment extraction failed")
-            return 23
+                logger.warning(f"auto-CRF: clip {i} extraction failed")
+                return 23
+            clip_paths.append(clip_path)
 
-        if _VMAF_ABORTED.is_set():
-            return 23
-
-        # Probe the segment for its own properties (pix_fmt, bit depth, etc.)
+        # --- Probe first clip for its properties ---
         from .probe import probe as _probe_file
 
-        seg_probe = _probe_file(segment)
+        seg_probe = _probe_file(clip_paths[0])
         if seg_probe is None:
-            if not _VMAF_ABORTED.is_set():
-                _out("  [yellow]warning:[/] could not probe test segment, using CRF 23")
+            _out("  [yellow]warning:[/] could not probe test clip, using CRF 23")
             return 23
 
-        # --- Encode test segments at each candidate CRF ---
+        # --- Encode test clips at each candidate CRF ---
         crf_scores: list[tuple[int, float]] = []
 
-        for i, crf in enumerate(_CANDIDATE_CRFS):
-            if _VMAF_ABORTED.is_set():
+        for crf in _CANDIDATE_CRFS:
+            clip_scores, min_vmaf = _probe_crf(
+                crf,
+                clip_paths,
+                seg_probe,
+                encoder,
+                tmp,
+                preset=preset,
+                progress_callback=progress_callback,
+            )
+
+            if min_vmaf is None:
+                continue
+
+            crf_scores.append((crf, min_vmaf))
+
+            clips_detail = ", ".join(f"{v:.1f}" for v in clip_scores)
+            n_failed = len(clip_paths) - len(clip_scores)
+            if n_failed:
+                clips_detail += f" [yellow]({n_failed} failed)[/]"
+            _out(
+                f"    testing CRF {crf}..."
+                f" min VMAF [green]{min_vmaf:.1f}[/]"
+                f"  (clips: {clips_detail})"
+            )
+
+            if progress_callback:
+                progress_callback(f"CRF {crf}")
+
+            # Early stop: once the *minimum* VMAF is below target we have
+            # a bracket -- no need to probe higher (worse) CRFs.
+            if min_vmaf < target_vmaf and len(crf_scores) >= 2:
                 break
 
-            encoded = tmp / f"crf_{crf}{segment.suffix}"
-            t0 = time.monotonic()
-
-            cmd = _build_probe_command(
-                segment, encoded, seg_probe, encoder, crf, preset=preset
-            )
-            if progress_callback:
-                progress_callback(f"encoding at CRF {crf}\u2026")
-            try:
-                proc_result = _ffmpeg_run(cmd, timeout=600)
-            except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-                elapsed = time.monotonic() - t0
-                if not _VMAF_ABORTED.is_set():
-                    _out(f"    testing CRF {crf}... [red]{type(e).__name__}[/]")
-                logger.warning(f"auto-CRF probe encode failed for CRF {crf}: {e}")
-                continue
-            elapsed = time.monotonic() - t0
-
-            if proc_result.returncode != 0:
-                if _VMAF_ABORTED.is_set():
-                    break
-                _out(f"    testing CRF {crf}... [red]encode failed[/]")
-                logger.warning(
-                    f"auto-CRF probe encode failed for CRF {crf}:"
-                    f" {proc_result.stderr[:200]}"
-                )
-                continue
-
-            if progress_callback:
-                progress_callback(f"measuring VMAF for CRF {crf}\u2026")
-            vmaf_score = _compute_vmaf_score(segment, encoded)
-
-            if vmaf_score is not None:
-                crf_scores.append((crf, vmaf_score))
-                _out(
-                    f"    testing CRF {crf}... "
-                    f"VMAF [green]{vmaf_score:.1f}[/]  ({elapsed:.0f}s)"
-                )
-                if progress_callback:
-                    progress_callback(f"CRF {crf}")
-                # Early stop: once we cross below the target we have a
-                # bracket — no need to probe higher (worse) CRFs.
-                if vmaf_score < target_vmaf and len(crf_scores) >= 2:
-                    break
-            else:
-                _out(f"    testing CRF {crf}... [yellow]VMAF failed[/]")
-
-        # --- No usable scores — fall back ---
+        # --- No usable scores -- fall back ---
         if not crf_scores:
-            if not _VMAF_ABORTED.is_set():
-                _out("  [yellow]warning:[/] no VMAF scores obtained, using CRF 23")
-                logger.warning("auto-CRF: no VMAF scores obtained")
+            _out("  [yellow]warning:[/] no VMAF scores obtained, using CRF 23")
+            logger.warning("auto-CRF: no VMAF scores obtained")
             return 23
 
         # --- Refinement: extend search when all scores are on one side ---
-        # After an early stop with a bracket, neither branch triggers (scores
-        # span both sides), so refinement only fires for extreme cases.
         crf_scores.sort(key=lambda x: x[0])
+        refinement_crf: int | None = None
         if all(vmaf >= target_vmaf for _, vmaf in crf_scores):
-            # All above target — probe a higher CRF
-            if progress_callback:
-                progress_callback("refining at CRF 38\u2026")
-            _try_probe(
-                crf_scores,
-                38,
-                segment,
-                seg_probe,
-                encoder,
-                tmp,
-                preset=preset,
-                console=console,
-                output_lines=output_lines,
-            )
+            refinement_crf = 38
         elif all(vmaf <= target_vmaf for _, vmaf in crf_scores):
-            # All below target — probe a lower CRF
+            refinement_crf = 13
+
+        if refinement_crf is not None and refinement_crf not in {
+            c for c, _ in crf_scores
+        }:
             if progress_callback:
-                progress_callback("refining at CRF 13\u2026")
-            _try_probe(
-                crf_scores,
-                13,
-                segment,
+                progress_callback(f"refining at CRF {refinement_crf}...")
+            clip_scores, min_vmaf = _probe_crf(
+                refinement_crf,
+                clip_paths,
                 seg_probe,
                 encoder,
                 tmp,
                 preset=preset,
-                console=console,
-                output_lines=output_lines,
+                progress_callback=progress_callback,
             )
+            if min_vmaf is not None:
+                crf_scores.append((refinement_crf, min_vmaf))
+                clips_detail = ", ".join(f"{v:.1f}" for v in clip_scores)
+                _out(
+                    f"    testing CRF {refinement_crf}..."
+                    f" min VMAF [green]{min_vmaf:.1f}[/]"
+                    f"  (clips: {clips_detail})"
+                )
 
         # --- Fit and return ---
         optimal_crf = _fit_crf(crf_scores, target_vmaf)

@@ -10,9 +10,6 @@ import sys
 from importlib.metadata import version
 from pathlib import Path
 
-import concurrent.futures
-import os
-import threading
 
 from rich.console import Console
 
@@ -41,8 +38,29 @@ from .pipeline import (
     run_pipeline,
     run_replace,
 )
-from .probe import ProbeResult
-from .vmaf import determine_crf, kill_all_vmaf_procs, vmaf_available
+from .vmaf import _CLIP_DURATION, _NUM_CLIPS, determine_crf, vmaf_available
+
+
+def _positive_int_ge(value: str, minimum: int = 1) -> int:
+    """Argparse type helper: validate int >= *minimum*."""
+    try:
+        n = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"'{value}' is not a valid integer") from exc
+    if n < minimum:
+        raise argparse.ArgumentTypeError(f"'{n}' must be at least {minimum}")
+    return n
+
+
+def _positive_float_gt(value: str, minimum: float = 0.0) -> float:
+    """Argparse type helper: validate float > *minimum*."""
+    try:
+        n = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"'{value}' is not a valid number") from exc
+    if n <= minimum:
+        raise argparse.ArgumentTypeError(f"'{n}' must be greater than {minimum}")
+    return n
 
 
 def _valid_resize(spec: str) -> bool:
@@ -85,6 +103,7 @@ examples:
   h265ify --vmaf 93 ~/Videos/      evaluate all videos with custom VMAF target
   h265ify --vmaf 95 --sample 5     evaluate a random sample of 5 files
   h265ify --vmaf 95 --sample 25%   evaluate a random 25%% of files
+  h265ify --vmaf 95 --vmaf-clips 5 --vmaf-clip-duration 10  customise VMAF sampling (5 clips, 10s each)
 """,
     )
 
@@ -123,6 +142,20 @@ examples:
         type=str,
         metavar="N|N%",
         help="randomly sample N files or N%% for --vmaf evaluation",
+    )
+    encoding.add_argument(
+        "--vmaf-clips",
+        type=lambda v: _positive_int_ge(v, 1),
+        default=3,
+        metavar="N",
+        help="number of sample clips for VMAF evaluation (default: 3)",
+    )
+    encoding.add_argument(
+        "--vmaf-clip-duration",
+        type=lambda v: _positive_float_gt(v, 0.0),
+        default=8.0,
+        metavar="SECS",
+        help="duration of each VMAF sample clip in seconds (default: 8)",
     )
     encoding.add_argument(
         "--resize",
@@ -384,6 +417,10 @@ def _run(args: argparse.Namespace, console: Console, err_console: Console) -> No
             ignored.append("--format")
         if args.sample is not None:
             ignored.append("--sample")
+        if args.vmaf_clips != _NUM_CLIPS:
+            ignored.append("--vmaf-clips")
+        if args.vmaf_clip_duration != _CLIP_DURATION:
+            ignored.append("--vmaf-clip-duration")
         if ignored:
             err_console.print(
                 f"[yellow]note:[/] --replace does no encoding; "
@@ -409,6 +446,14 @@ def _run(args: argparse.Namespace, console: Console, err_console: Console) -> No
         sys.exit(1)
 
     # --- Encode mode ---
+    # --- Warn about VMAF-only flags in encode mode ---
+    if args.vmaf_clips != _NUM_CLIPS:
+        err_console.print("[yellow]note:[/] --vmaf-clips has no effect without --vmaf")
+    if args.vmaf_clip_duration != _CLIP_DURATION:
+        err_console.print(
+            "[yellow]note:[/] --vmaf-clip-duration has no effect without --vmaf"
+        )
+
     _cmd_encode(args, console)
 
 
@@ -778,20 +823,22 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
     if args.sample is not None:
         stype, sval = args.sample
         if stype == "pct":
-            sample_note = f"  sample={sval*100:.0f}%"
+            sample_note = f"  sample={sval * 100:.0f}%"
         else:
             sample_note = f"  sample={sval}"
 
     logger.info(
         f"vmaf-eval: encoder={encoder.name}  target_vmaf={args.vmaf}"
-        f"  preset={args.preset}{sample_note}"
+        f"  preset={args.preset}"
+        f"  clips={args.vmaf_clips}x{args.vmaf_clip_duration}s{sample_note}"
     )
     parts = [f"[bold green]{encoder.label}[/]{hw_note}"]
     parts.append(f"VMAF target [green]{args.vmaf}[/]")
     parts.append(f"preset [green]{args.preset}[/]")
+    parts.append(f"clips [cyan]{args.vmaf_clips}x{args.vmaf_clip_duration}s[/]")
     if args.sample is not None:
         if stype == "pct":
-            parts.append(f"sample [cyan]{sval*100:.0f}%[/]")
+            parts.append(f"sample [cyan]{sval * 100:.0f}%[/]")
         else:
             parts.append(f"sample [cyan]{sval}[/]")
     console.print(" ".join(parts))
@@ -823,7 +870,9 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
     if skipped_h265:
         console.print()
         for pr in skipped_h265:
-            console.print(f"  skip  {vmaf_display.get(pr.path, pr.path.name)}  (already h265)")
+            console.print(
+                f"  skip  {vmaf_display.get(pr.path, pr.path.name)}  (already h265)"
+            )
 
     if not to_evaluate:
         if skipped_h265:
@@ -855,7 +904,7 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
             console.print(f"  {vmaf_display.get(pr.path, pr.path.name)}")
         return
 
-    # --- Run VMAF evaluation (parallel) ---
+    # --- Run VMAF evaluation (sequential) ---
     from rich.progress import (
         Progress,
         SpinnerColumn,
@@ -863,22 +912,6 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
     )
 
     n_probe = len(to_evaluate)
-
-    # Cap VMAF parallelism to avoid thrashing on CPU-bound ffmpeg encodes.
-    # Respect H265IFY_VMAF_WORKERS env var for advanced tuning.
-    env_workers = os.environ.get("H265IFY_VMAF_WORKERS")
-    if env_workers is not None:
-        try:
-            probe_workers = int(env_workers)
-        except ValueError:
-            console.print(
-                f"  [yellow]warning:[/] H265IFY_VMAF_WORKERS='{env_workers}'"
-                " is not an integer, using default"
-            )
-            probe_workers = min(os.cpu_count() or 4, 4)
-    else:
-        probe_workers = min(os.cpu_count() or 4, 4)
-    probe_lock = threading.Lock()
     results: dict[Path, int] = {}
 
     with Progress(
@@ -892,65 +925,72 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
             total=None,
         )
 
-        _vmaf_completed = 0
-
         def _probe_done(msg: str) -> None:
             """Callback from determine_crf for live progress updates."""
             progress.update(task, description=msg)
 
-        def _eval_one(pr: ProbeResult) -> tuple[ProbeResult, int]:
-            nonlocal _vmaf_completed
-            lines: list[str] = []
-            crf = determine_crf(
-                pr.path,
-                pr,
-                encoder,
-                target_vmaf=args.vmaf,
-                preset=args.preset,
-                output_lines=lines,
-                progress_callback=_probe_done,
-            )
-            with probe_lock:
-                _vmaf_completed += 1
+        interrupted = False
+        try:
+            for idx, pr in enumerate(to_evaluate, 1):
+                progress.update(
+                    task,
+                    description=f"[{idx}/{n_probe}] {vmaf_display.get(pr.path, pr.path.name)}…",
+                )
+
+                lines: list[str] = []
+                crf = determine_crf(
+                    pr.path,
+                    pr,
+                    encoder,
+                    target_vmaf=args.vmaf,
+                    preset=args.preset,
+                    output_lines=lines,
+                    progress_callback=_probe_done,
+                    num_clips=args.vmaf_clips,
+                    clip_duration=args.vmaf_clip_duration,
+                )
+                results[pr.path] = crf
+                logger.info(f"vmaf-eval: {pr.path.name} -> CRF {crf}")
+
                 progress.update(
                     task,
                     description=f"VMAF evaluation ({n_probe} file(s), target: {args.vmaf})…",
                 )
-                console.print(f"  [{_vmaf_completed}/{n_probe}] {vmaf_display.get(pr.path, pr.path.name)}")
+                console.print(
+                    f"  [{idx}/{n_probe}] {vmaf_display.get(pr.path, pr.path.name)}"
+                )
                 for line in lines:
                     console.print(line)
-            return pr, crf
-
-        interrupted = False
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=probe_workers)
-        try:
-            fut_to_pr = {executor.submit(_eval_one, pr): pr for pr in to_evaluate}
-            for future in concurrent.futures.as_completed(fut_to_pr):
-                pr, crf = future.result()
-                results[pr.path] = crf
-                logger.info(f"vmaf-eval: {pr.path.name} -> CRF {crf}")
         except KeyboardInterrupt:
             interrupted = True
-            console.print("\n  [yellow]interrupted, terminating VMAF probes\u2026[/]")
-            kill_all_vmaf_procs()
-        finally:
-            # wait=True is safe now: subprocesses are killed above on interrupt,
-            # or completed normally; threads finish promptly either way.
-            executor.shutdown(wait=True, cancel_futures=True)
+            console.print()
+            if results:
+                console.print("  [yellow]interrupted — partial results below[/]")
+            else:
+                console.print("  [yellow]interrupted[/]")
 
     # --- Summary ---
     if interrupted or not results:
         if results:
             console.print()
-            console.print("  [yellow]VMAF evaluation stopped (partial results)[/]")
+            for pr in to_evaluate:
+                if pr.path in results:
+                    crf_val = results[pr.path]
+                    console.print(
+                        f"  [green]{vmaf_display.get(pr.path, pr.path.name)}[/]"
+                        f" \u2192 CRF [bold]{crf_val}[/]"
+                    )
+            console.print()
+            console.print("  [yellow]VMAF evaluation incomplete (partial results)[/]")
         else:
             console.print()
             console.print("  [yellow]VMAF evaluation stopped[/]")
         sys.exit(130)
 
-    console.print()
+    # Full results summary
     crf_values = list(results.values())
     min_crf, max_crf = min(crf_values), max(crf_values)
+    console.print()
     console.print("[bold]VMAF evaluation complete.[/]")
     if min_crf == max_crf:
         console.print(f"  all files: CRF [bold]{min_crf}[/]")
@@ -959,7 +999,10 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
     console.print()
     for pr in to_evaluate:
         crf = results[pr.path]
-        console.print(f"  [green]{vmaf_display.get(pr.path, pr.path.name)}[/] \u2192 CRF [bold]{crf}[/]")
+        console.print(
+            f"  [green]{vmaf_display.get(pr.path, pr.path.name)}[/]"
+            f" \u2192 CRF [bold]{crf}[/]"
+        )
     console.print()
     console.print("  [dim]Use --crf <N> to encode with your chosen value.[/]")
 

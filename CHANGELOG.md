@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`--vmaf-clips` flag** to control the number of sample clips for VMAF
+  evaluation (default: 3).
+- **`--vmaf-clip-duration` flag** to control the duration of each VMAF sample
+  clip in seconds (default: 8).
+
+### Changed
+
+- VMAF evaluation rewritten with multi-clip scene detection (via ffmpeg's
+  `scdet` filter) instead of a single segment. Extracts N short clips from
+  different scenes and uses the minimum VMAF across clips, ensuring the
+  hardest sampled scene drives the CRF recommendation.
+- VMAF probing changed from parallel to sequential evaluation, consistent
+  with the project's hardware encoder resource philosophy.
+- Removed `H265IFY_VMAF_WORKERS` env var (no longer needed with sequential
+  probing).
+- `--vmaf` no longer supports the `H265IFY_VMAF_WORKERS` env var or the
+  legacy `kill_all_vmaf_procs()` SIGINT handler — the simplified threading
+  model uses `subprocess.run()` instead of `Popen`.
+
 ## [0.7.0] - 2026-07-15
 
 ### Added
