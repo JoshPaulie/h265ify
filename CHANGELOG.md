@@ -7,11 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-15
+
 ### Added
 
 - **`--sample` flag** for use with `--vmaf`. Accepts an integer (randomly sample N
   files) or a percentage string like `25%` (randomly sample N% of eligible files).
   Sampling happens after h265 filtering, so only non-h265 files are candidates.
+- **Trimmed display names on narrow terminals**. When a batch of files shares a
+  long common prefix (e.g., TV show episodes), the progress bar, completion
+  lines, replace-mode output, and VMAF evaluation all show a shortened name
+  with the shared prefix removed — much easier to read on smartphones.
+- **Session tag** (`[aB3xYz]`). Each invocation generates a unique 6-character
+  alphanumeric tag that appears in every application log line, the ffmpeg log,
+  and the error log — making it trivial to grep for a specific run.
 
 ### Changed
 
@@ -160,6 +169,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rich-based colorful console output with per-file results and final summary.
 - Sequential encoding (one file at a time) to avoid splitting hardware encoder throughput.
 
+[0.7.0]: https://github.com/JoshPaulie/h265ify/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/JoshPaulie/h265ify/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/JoshPaulie/h265ify/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/JoshPaulie/h265ify/compare/v0.3.1...v0.4.0
