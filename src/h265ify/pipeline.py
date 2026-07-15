@@ -329,7 +329,7 @@ def run_pipeline(
         with Progress(
             TextColumn("{task.description}"),
             BarColumn(complete_style="green", finished_style="green", style="grey42"),
-            TaskProgressColumn(text_format="{task.percentage:>3.0f}%"),
+            TaskProgressColumn(text_format="{task.percentage:>5.1f}%"),
             TextColumn("{task.fields[suffix]}"),
             console=console,
             transient=False,
@@ -353,7 +353,7 @@ def run_pipeline(
                 current_file = progress.add_task(
                     f"  {job.input_path.name}",
                     total=100,
-                    suffix="",
+                    suffix="starting…",
                 )
 
                 logger.info(
@@ -368,7 +368,9 @@ def run_pipeline(
                     pct: float, speed: float, current_seconds: float
                 ) -> None:
                     if current_file is not None:
-                        speed_str = f"@ {speed:.1f}x" if speed > 0 else ""
+                        # Speed display
+                        speed_str = f"@ {speed:.1f}x" if speed > 0 else "initializing…"
+                        # ETA
                         if speed > 0 and job.probe_result.duration > 0:
                             file_remaining = max(
                                 0.0, job.probe_result.duration - current_seconds
@@ -376,8 +378,17 @@ def run_pipeline(
                             eta_str = f"  eta {fmt_eta(file_remaining / speed)}"
                         else:
                             eta_str = ""
+                        # Elapsed / total time (always shown so user sees movement)
+                        if job.probe_result.duration > 0:
+                            current_str = fmt_eta(current_seconds)
+                            total_str = fmt_eta(job.probe_result.duration)
+                            time_str = f"  {current_str}/{total_str}"
+                        else:
+                            time_str = f"  {fmt_eta(current_seconds)}"
                         progress.update(
-                            current_file, completed=pct, suffix=f"{speed_str}{eta_str}"
+                            current_file,
+                            completed=pct,
+                            suffix=f"{time_str}  {speed_str}{eta_str}",
                         )
                     if total_duration > 0:
                         progress.update(
