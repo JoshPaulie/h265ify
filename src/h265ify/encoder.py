@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 from .hardware import Encoder, encoder_quality_flags, pix_fmt_for_encoder
-from .logger import FFMPEG_LOG_FILE, logger
+from .logger import FFMPEG_LOG_FILE, get_session_tag, logger
 from .probe import ProbeResult
 
 ProgressCallback = Callable[
@@ -435,10 +435,12 @@ def _write_ffmpeg_log(
     """Append a single ffmpeg invocation's stderr to the ffmpeg log file."""
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     header = label or cmd[-1]  # use label or output path as identifier
+    tag = get_session_tag()
+    tag_suffix = f"  tag=[{tag}]" if tag else ""
     try:
         with FFMPEG_LOG_FILE.open("a", encoding="utf-8") as fh:
             fh.write(f"\n{'=' * 72}\n")
-            fh.write(f"{ts}  rc={returncode}  {header}\n")
+            fh.write(f"{ts}  rc={returncode}  {header}{tag_suffix}\n")
             fh.write(f"cmd: {' '.join(cmd)}\n")
             fh.write("-" * 72 + "\n")
             fh.writelines(stderr_lines)

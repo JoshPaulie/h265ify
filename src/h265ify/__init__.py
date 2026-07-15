@@ -23,11 +23,15 @@ from .logger import (
     FFMPEG_LOG_FILE,
     LOG_FILE,
     logger,
+    generate_tag,
+    get_session_tag,
     install_excepthook,
+    set_session_tag,
 )
 from .pipeline import (
     EncodeJob,
     EncodeResult,
+    compute_display_names,
     find_replace_pairs,
     find_video_files,
     get_output_path,
@@ -231,9 +235,13 @@ examples:
     # --- Install exception hook ---
     install_excepthook()
 
+    # --- Generate session tag ---
+    _tag = generate_tag()
+    set_session_tag(_tag)
+
     # --- Log session start ---
     _ver = version("h265ify")
-    logger.info(f"=== h265ify {_ver} ===")
+    logger.info(f"=== h265ify {_ver}  [{_tag}] ===")
     mode = (
         "vmaf-eval"
         if args.vmaf
@@ -693,7 +701,7 @@ def _cmd_replace(args: argparse.Namespace, console: Console) -> None:
             "[bold red]\u26a0  --permanent:[/] originals will be"
             " [bold red]permanently deleted[/] \u2014 not moved to trash"
         )
-        console.print(f"[dim]log: {LOG_FILE}[/]")
+        console.print(f"[dim]log: {LOG_FILE}[/]  tag: {get_session_tag()}")
         console.print()
         answer = (
             console.input("[red]type 'yes' to confirm permanent deletion:[/] ")
@@ -708,7 +716,7 @@ def _cmd_replace(args: argparse.Namespace, console: Console) -> None:
         console.print(
             "[bold]replace[/]  [dim]originals \u2192 trash"
             + ("  (dry-run)" if args.dry_run else "")
-            + f"  log: {LOG_FILE}[/]"
+            + f"  log: {LOG_FILE}[/]  tag: {get_session_tag()}"
         )
         console.print()
 
@@ -724,8 +732,15 @@ def _cmd_replace(args: argparse.Namespace, console: Console) -> None:
     total_original = sum(p.original_path.stat().st_size for p in pairs)
     total_h265 = sum(p.h265_path.stat().st_size for p in pairs)
 
+    all_replace_paths = [p.original_path for p in pairs] + [p.h265_path for p in pairs]
+    replace_display = compute_display_names(all_replace_paths)
+
     replaced, skipped = run_replace(
-        pairs, dry_run=args.dry_run, permanent=args.permanent, console=console
+        pairs,
+        dry_run=args.dry_run,
+        permanent=args.permanent,
+        console=console,
+        display_names=replace_display,
     )
 
     console.print()
@@ -780,7 +795,7 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
         else:
             parts.append(f"sample [cyan]{sval}[/]")
     console.print(" ".join(parts))
-    console.print(f"[dim]log: {LOG_FILE}[/]")
+    console.print(f"[dim]log: {LOG_FILE}[/]  tag: {get_session_tag()}")
     console.print()
 
     # --- Find files ---
@@ -801,10 +816,14 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
     to_evaluate = [pr for pr in probe_results if not pr.is_h265]
     skipped_h265 = [pr for pr in probe_results if pr.is_h265]
 
+    # Compute display names (trim common prefix) for narrow terminals
+    vmaf_all_paths = [pr.path for pr in probe_results]
+    vmaf_display = compute_display_names(vmaf_all_paths) if vmaf_all_paths else {}
+
     if skipped_h265:
         console.print()
         for pr in skipped_h265:
-            console.print(f"  skip  {pr.path.name}  (already h265)")
+            console.print(f"  skip  {vmaf_display.get(pr.path, pr.path.name)}  (already h265)")
 
     if not to_evaluate:
         if skipped_h265:
@@ -833,7 +852,7 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
     if args.dry_run:
         console.print("would evaluate:")
         for pr in to_evaluate:
-            console.print(f"  {pr.path.name}")
+            console.print(f"  {vmaf_display.get(pr.path, pr.path.name)}")
         return
 
     # --- Run VMAF evaluation (parallel) ---
@@ -897,7 +916,7 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
                     task,
                     description=f"VMAF evaluation ({n_probe} file(s), target: {args.vmaf})…",
                 )
-                console.print(f"  [{_vmaf_completed}/{n_probe}] {pr.path.name}")
+                console.print(f"  [{_vmaf_completed}/{n_probe}] {vmaf_display.get(pr.path, pr.path.name)}")
                 for line in lines:
                     console.print(line)
             return pr, crf
@@ -940,7 +959,7 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
     console.print()
     for pr in to_evaluate:
         crf = results[pr.path]
-        console.print(f"  [green]{pr.path.name}[/] \u2192 CRF [bold]{crf}[/]")
+        console.print(f"  [green]{vmaf_display.get(pr.path, pr.path.name)}[/] \u2192 CRF [bold]{crf}[/]")
     console.print()
     console.print("  [dim]Use --crf <N> to encode with your chosen value.[/]")
 
@@ -972,7 +991,7 @@ def _cmd_encode(args: argparse.Namespace, console: Console) -> None:
     if args.resize:
         parts.append(f"resize [cyan]{args.resize}[/]")
     console.print(" ".join(parts))
-    console.print(f"[dim]log: {LOG_FILE}[/]")
+    console.print(f"[dim]log: {LOG_FILE}[/]  tag: {get_session_tag()}")
     if args.yolo and not args.dry_run:
         if args.permanent:
             console.print(
@@ -1037,6 +1056,12 @@ def _cmd_encode(args: argparse.Namespace, console: Console) -> None:
             console.print("nothing to do.")
         sys.exit(0)
 
+    # Compute display names (trim common prefix) for narrow terminals
+    all_input_paths = [j.input_path for j in jobs] + [r.path for r in skipped]
+    display_names = compute_display_names(all_input_paths)
+    for j in jobs:
+        j.display_name = display_names.get(j.input_path)
+
     n_jobs = len(jobs)
     total_input = sum(j.probe_result.file_size for j in jobs)
     size_str = f"  ({format_size(total_input)})" if total_input > 0 else ""
@@ -1058,7 +1083,7 @@ def _cmd_encode(args: argparse.Namespace, console: Console) -> None:
             if result.elapsed < 60
             else f"{result.elapsed / 60:.1f}m"
         )
-        name = job.input_path.name
+        name = job.display_name or job.input_path.name
 
         # Fit name to available terminal width.
         # Fixed overhead:
