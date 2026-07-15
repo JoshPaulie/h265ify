@@ -10,6 +10,7 @@ wheels/
 .venv
 
 # Test video files
+test_videos*/
 *.mp4
 *.mkv
 *.mov
