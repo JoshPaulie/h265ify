@@ -72,6 +72,7 @@ def generate_tag() -> str:
     """Generate a 6-character alphanumeric tag (a-z, A-Z, 0-9)."""
     return "".join(random.choices(string.ascii_letters + string.digits, k=6))
 
+
 # --- Main application logger ---
 logger: logging.Logger = logging.getLogger("h265ify")
 logger.setLevel(logging.DEBUG)
