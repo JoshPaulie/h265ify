@@ -25,9 +25,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alongside VMAF scores, enabling empirical CRF-size projections.
 - **`estimate_crf_size_ratio`**: new public helper that fits log(size) ≈ a×CRF
   + b from probe data to project encoded size ratios between CRF values.
-
-### Added
-
 - **Lost cause early exit for `--vmaf`**: if even the best CRF candidate (18)
   can't reach the target VMAF, the probe stops immediately instead of
   testing worse-quality CRFs.
@@ -41,26 +38,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The lost cause check now references `_CANDIDATE_CRFS[0]` instead of a
-  hardcoded `18`, making it robust to candidate list reordering.
-- Lost cause events are logged with VMAF details for debugging.
-- VMAF per-file output now shows floored integer CRF with the interpolated
-  float in dim (e.g. `CRF 32 (from 32.3)`) instead of the raw float, so
-  users immediately see the actionable encode value.
-- VMAF summary now prints a safe batch CRF and projected savings when
-  evaluating multiple files.
-
-- VMAF evaluation rewritten with multi-clip scene detection (via ffmpeg's
+- **VMAF evaluation rewritten** with multi-clip scene detection (via ffmpeg's
   `scdet` filter) instead of a single segment. Extracts N short clips from
   different scenes and uses the minimum VMAF across clips, ensuring the
   hardest sampled scene drives the CRF recommendation.
-- VMAF probing changed from parallel to sequential evaluation, consistent
+- **VMAF probing changed from parallel to sequential** evaluation, consistent
   with the project's hardware encoder resource philosophy.
-- Removed `H265IFY_VMAF_WORKERS` env var (no longer needed with sequential
+- **VMAF per-file output** now shows floored integer CRF with the interpolated
+  float in dim (e.g. `CRF 32 (from 32.3)`) instead of the raw float, so
+  users immediately see the actionable encode value.
+
+### Removed
+
+- **`H265IFY_VMAF_WORKERS` env var** (no longer needed with sequential
   probing).
-- `--vmaf` no longer supports the `H265IFY_VMAF_WORKERS` env var or the
-  legacy `kill_all_vmaf_procs()` SIGINT handler — the simplified threading
-  model uses `subprocess.run()` instead of `Popen`.
+- **`kill_all_vmaf_procs()` and its SIGINT handler** — the simplified
+  threading model uses `subprocess.run()` instead of `Popen`, so `--vmaf` no
+  longer manages child processes directly.
 
 ## [0.7.0] - 2026-07-15
 
