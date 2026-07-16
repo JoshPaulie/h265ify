@@ -18,6 +18,7 @@ from h265ify.vmaf import (
     _probe_crf,
     _scdet_available,
     _select_clips,
+    estimate_crf_size_ratio,
     vmaf_available,
 )
 
@@ -50,54 +51,58 @@ class TestFitCrf:
 
     # --- Normal bracket ---
     def test_normal_bracket(self) -> None:
-        """Scores straddle target; linear fit picks between them."""
+        """Scores straddle target; interpolation picks between them."""
         # VMAF drops ~3 per 5 CRF steps from 97.5 at 18 -> 93 at 33
+        # Bracketing pair: (23, 96) and (28, 94.5) for target 95
         crf = _fit_crf([(18, 97.5), (23, 96), (28, 94.5), (33, 93)], 95)
-        assert crf == 26
+        # 23 + (95 - 96) * (28 - 23) / (94.5 - 96) = 23 + 3.33... = 26.33...
+        assert crf == pytest.approx(26.33, abs=0.02)
 
     def test_normal_bracket_target_lower(self) -> None:
+        """Target matches lowest VMAF -> all-above branch."""
         crf = _fit_crf([(18, 97.5), (23, 96), (28, 94.5), (33, 93)], 93)
-        assert crf == 33
+        assert crf == 33.0
 
     def test_normal_bracket_target_higher(self) -> None:
+        """Target matches highest VMAF -> all-below branch."""
         crf = _fit_crf([(18, 97.5), (23, 96), (28, 94.5), (33, 93)], 98)
-        assert crf == 18
+        assert crf == 18.0
 
     # --- All above target -> highest CRF ---
     def test_all_above_returns_highest(self) -> None:
         crf = _fit_crf([(18, 99), (23, 98), (28, 97)], 95)
-        assert crf == 28
+        assert crf == 28.0
 
     def test_all_above_with_only_one(self) -> None:
         crf = _fit_crf([(18, 99)], 95)
-        assert crf == 18
+        assert crf == 18.0
 
     # --- All below target -> lowest CRF ---
     def test_all_below_returns_lowest(self) -> None:
         crf = _fit_crf([(28, 93), (33, 90)], 95)
-        assert crf == 28
+        assert crf == 28.0
 
     def test_all_below_with_only_one(self) -> None:
         crf = _fit_crf([(33, 90)], 95)
-        assert crf == 33
+        assert crf == 33.0
 
     # --- Edge cases ---
     def test_empty_scores_returns_23(self) -> None:
-        assert _fit_crf([], 95) == 23
+        assert _fit_crf([], 95) == 23.0
 
     def test_single_point_returns_that_crf(self) -> None:
         crf = _fit_crf([(23, 95)], 95)
-        assert crf == 23
+        assert crf == 23.0
 
     def test_flat_scores_all_at_target(self) -> None:
         """All scores equal to target -> all-above branch returns highest."""
         crf = _fit_crf([(18, 95), (23, 95), (28, 95)], 95)
-        assert crf == 28
+        assert crf == 28.0
 
     def test_flat_scores_all_below(self) -> None:
         """Flat scores all below target -> all-below branch returns lowest."""
         crf = _fit_crf([(18, 80), (23, 80), (28, 80)], 95)
-        assert crf == 18
+        assert crf == 18.0
 
     # --- Positive slope (invalid measurement) ---
     def test_positive_slope_returns_best_quality(self) -> None:
@@ -108,7 +113,7 @@ class TestFitCrf:
         """
         crf = _fit_crf([(18, 88), (23, 92), (28, 95)], 95)
         # All scores (88, 92, 95) <= 95 -> all-below -> return lowest CRF
-        assert crf == 18
+        assert crf == 18.0
 
     # --- Near-zero slope ---
     def test_near_zero_slope_returns_median(self) -> None:
@@ -116,29 +121,32 @@ class TestFitCrf:
         crf = _fit_crf([(18, 96.1), (23, 96.0), (28, 95.9)], 95)
         # All above target -> would hit that branch first
         # 96.1, 96.0, 95.9 all >= 95
-        assert crf == 28
+        assert crf == 28.0
 
     def test_near_zero_slope_all_below(self) -> None:
         crf = _fit_crf([(18, 80.1), (23, 80.0), (28, 79.9)], 95)
-        assert crf == 18
+        assert crf == 18.0
 
     # --- Clamping ---
     def test_clamps_to_0(self) -> None:
         """Predicted CRF below 0 -> clamped to 0."""
-        # Very steep negative slope at low CRFs
+        # Bracketing pair: (18, 99) and (23, 80) for target 95
+        # 18 + (95-99)*(23-18)/(80-99) = 18 + 20/19 = 19.05
         crf = _fit_crf([(18, 99), (23, 80)], 95)
+        assert crf == pytest.approx(19.05, abs=0.02)
         assert crf >= 0
 
     def test_clamps_to_51(self) -> None:
         """Predicted CRF above 51 -> clamped to 51."""
         crf = _fit_crf([(18, 90), (23, 89), (28, 88)], 50)
+        assert crf == 28.0
         assert crf <= 51
 
     # --- Unsorted input ---
     def test_unsorted_input(self) -> None:
         """Function sorts internally, so input order doesn't matter."""
         crf = _fit_crf([(33, 93), (18, 97.5), (28, 94.5), (23, 96)], 95)
-        assert crf == 26
+        assert crf == pytest.approx(26.33, abs=0.02)
 
 
 # ── vmaf_available ────────────────────────────────────────────────────
@@ -235,8 +243,8 @@ class TestEvenlySpacedClips:
 
     def test_short_video_returns_single_clip(self) -> None:
         """When duration <= margin*2, a single clip at 25% is returned."""
-        margin = 8 + 5  # clip_duration + 5
         starts = _evenly_spaced_clips(duration=20, num_clips=3, clip_duration=8)
+        # clip_duration + 5 = margin, used above
         assert len(starts) == 1
         assert starts[0] == 20 * 0.25
 
@@ -270,7 +278,7 @@ class TestEvenlySpacedClips:
         assert all(s + 8 <= 50 for s in starts)
         # No overlap: each start should be >= previous start + clip_duration
         for i in range(1, len(starts)):
-            assert starts[i] >= starts[i - 1] + 8, f"clip {i} overlaps {i-1}"
+            assert starts[i] >= starts[i - 1] + 8, f"clip {i} overlaps {i - 1}"
 
 
 # ── _pick_clips_from_scenes ───────────────────────────────────────────
@@ -295,9 +303,7 @@ class TestPickClipsFromScenes:
 
     def test_short_video_single_clip(self) -> None:
         """Very short video returns single clip at 25%."""
-        starts = _pick_clips_from_scenes(
-            [], duration=20, num_clips=3, clip_duration=8
-        )
+        starts = _pick_clips_from_scenes([], duration=20, num_clips=3, clip_duration=8)
         assert len(starts) == 1
         assert starts[0] == 20 * 0.25
 
@@ -533,7 +539,7 @@ class TestProbeCrf:
                 Path("clip_1.mp4"),
                 Path("clip_2.mp4"),
             ]
-            scores, min_score = _probe_crf(
+            scores, min_score, encoded_bytes = _probe_crf(
                 crf=23,
                 clip_paths=clip_paths,
                 seg_probe=_sample_probe(),
@@ -543,6 +549,7 @@ class TestProbeCrf:
 
             assert scores == [95.0, 94.0, 93.0]
             assert min_score == 93.0
+            assert encoded_bytes == 0  # mocked clips have no real file size
             # Should have called _build_probe_command and _ffmpeg_run for each clip
             assert mock_build.call_count == 3
             assert mock_ffmpeg.call_count == 3
@@ -570,7 +577,7 @@ class TestProbeCrf:
                 Path("clip_1.mp4"),
                 Path("clip_2.mp4"),
             ]
-            scores, min_score = _probe_crf(
+            scores, min_score, encoded_bytes = _probe_crf(
                 crf=23,
                 clip_paths=clip_paths,
                 seg_probe=_sample_probe(),
@@ -580,6 +587,7 @@ class TestProbeCrf:
 
             assert scores == [95.0, 93.0]
             assert min_score == 93.0  # min of the two successful clips
+            assert encoded_bytes == 0
 
     def test_all_clips_fail_returns_none(self) -> None:
         encoder = _sample_encoder()
@@ -597,7 +605,7 @@ class TestProbeCrf:
             mock_vmaf.return_value = None
 
             clip_paths = [Path("clip_0.mp4"), Path("clip_1.mp4")]
-            scores, min_score = _probe_crf(
+            scores, min_score, encoded_bytes = _probe_crf(
                 crf=23,
                 clip_paths=clip_paths,
                 seg_probe=_sample_probe(),
@@ -607,6 +615,7 @@ class TestProbeCrf:
 
             assert scores == []
             assert min_score is None
+            assert encoded_bytes == 0
 
     def test_skip_on_encode_failure(self) -> None:
         encoder = _sample_encoder()
@@ -626,7 +635,7 @@ class TestProbeCrf:
             mock_vmaf.return_value = 94.0
 
             clip_paths = [Path("clip_0.mp4"), Path("clip_1.mp4")]
-            scores, min_score = _probe_crf(
+            scores, min_score, encoded_bytes = _probe_crf(
                 crf=23,
                 clip_paths=clip_paths,
                 seg_probe=_sample_probe(),
@@ -637,6 +646,7 @@ class TestProbeCrf:
             # Only the second clip contributed
             assert scores == [94.0]
             assert min_score == 94.0
+            assert encoded_bytes == 0
             # VMAF only called once (for the successful clip)
             assert mock_vmaf.call_count == 1
 
@@ -652,7 +662,7 @@ class TestProbeCrf:
             mock_ffmpeg.side_effect = subprocess.TimeoutExpired("ffmpeg", 600)
 
             clip_paths = [Path("clip_0.mp4"), Path("clip_1.mp4")]
-            scores, min_score = _probe_crf(
+            scores, min_score, encoded_bytes = _probe_crf(
                 crf=23,
                 clip_paths=clip_paths,
                 seg_probe=_sample_probe(),
@@ -662,3 +672,38 @@ class TestProbeCrf:
 
             assert scores == []
             assert min_score is None
+            assert encoded_bytes == 0
+
+
+# ── estimate_crf_size_ratio ─────────────────────────────────────────
+
+
+class TestEstimateCrfSizeRatio:
+    """estimate_crf_size_ratio computes projected size ratio between CRFs."""
+
+    def test_insufficient_data_returns_one(self) -> None:
+        """With < 2 data points, returns 1.0 (no projection)."""
+        assert estimate_crf_size_ratio([(23, 1000)], 23, 28) == 1.0
+        assert estimate_crf_size_ratio([], 23, 28) == 1.0
+
+    def test_higher_crf_smaller_file(self) -> None:
+        """Higher CRF produces smaller files \u2192 ratio < 1."""
+        # CRF 18 \u2192 2000 bytes, CRF 28 \u2192 1000 bytes (50% over 10 steps)
+        ratio = estimate_crf_size_ratio([(18, 2000), (28, 1000)], 18, 28)
+        assert ratio == pytest.approx(0.5, abs=0.02)
+
+    def test_lower_crf_larger_file(self) -> None:
+        """Going from higher CRF to lower CRF \u2192 ratio > 1."""
+        ratio = estimate_crf_size_ratio([(23, 1500), (28, 1000)], 28, 23)
+        assert ratio == pytest.approx(1.5, abs=0.05)
+
+    def test_three_point_fit(self) -> None:
+        """Uses all data points for more robust fit."""
+        ratio = estimate_crf_size_ratio([(18, 3000), (23, 1700), (28, 1000)], 28, 33)
+        assert ratio < 1.0
+        assert 0.4 < ratio < 1.0
+
+    def test_same_crf_returns_one(self) -> None:
+        """from_crf == to_crf \u2192 exp(0) \u2192 1.0."""
+        ratio = estimate_crf_size_ratio([(18, 2000), (28, 1000)], 28, 28)
+        assert ratio == pytest.approx(1.0, abs=0.01)
