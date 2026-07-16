@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   evaluation (default: 3).
 - **`--vmaf-clip-duration` flag** to control the duration of each VMAF sample
   clip in seconds (default: 8).
+- **Linear CRF interpolation**: when VMAF scores bracket the target, the
+  recommended CRF is linearly interpolated between the two bracketing scores
+  for a more precise recommendation (shown as e.g. `CRF 32 (from 32.3)`).
+- **Safe batch CRF**: multi-file VMAF evaluation now prints the most
+  conservative (floor of all per-file CRFs) as a safe batch CRF.
+- **Projected savings**: in multi-file VMAF evaluation, the summary shows
+  empirical projected size savings between the safe batch CRF and CRF +1,
+  using actual encoded clip sizes from the probes.
+- **Per-CRF encoded size tracking**: `_probe_crf` tracks total encoded bytes
+  alongside VMAF scores, enabling empirical CRF-size projections.
+- **`estimate_crf_size_ratio`**: new public helper that fits log(size) ≈ a×CRF
+  + b from probe data to project encoded size ratios between CRF values.
 
 ### Added
 
@@ -28,6 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The lost cause check now references `_CANDIDATE_CRFS[0]` instead of a
   hardcoded `18`, making it robust to candidate list reordering.
 - Lost cause events are logged with VMAF details for debugging.
+- VMAF per-file output now shows floored integer CRF with the interpolated
+  float in dim (e.g. `CRF 32 (from 32.3)`) instead of the raw float, so
+  users immediately see the actionable encode value.
+- VMAF summary now prints a safe batch CRF and projected savings when
+  evaluating multiple files.
 
 - VMAF evaluation rewritten with multi-clip scene detection (via ffmpeg's
   `scdet` filter) instead of a single segment. Extracts N short clips from
