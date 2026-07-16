@@ -108,6 +108,24 @@ def _validate_encoder(encoder_name: str) -> bool:
         return False
 
 
+def resolve_encoder(*, cpu: bool = False) -> tuple[Encoder, str]:
+    """Return the best available encoder and a Rich-markup hardware note.
+
+    When *cpu* is ``True``, forces ``libx265``.  Otherwise detects the best
+    hardware encoder, falling back to ``libx265`` with a warning note.
+    The note is empty when a hardware encoder is active.
+    """
+    if cpu:
+        return (
+            Encoder(name="libx265", is_hardware=False, label="CPU (libx265)"),
+            " [dim](--cpu forced)[/]",
+        )
+    encoder = detect_encoder()
+    if not encoder.is_hardware:
+        return encoder, " [yellow](no hardware encoder detected)[/]"
+    return encoder, ""
+
+
 def detect_encoder() -> Encoder:
     """Detect the best available h265 hardware encoder, falling back to libx265.
 
