@@ -306,7 +306,7 @@ def _build_probe_command(
         "-hide_banner",
         "-loglevel",
         "error",
-        ]
+    ]
     cmd.extend(["-i", str(input_path)])
     cmd.extend(["-map", "0:v:0"])
     cmd.extend(["-c:v", encoder.name])
@@ -387,17 +387,16 @@ def _compute_vmaf_score(reference: Path, distorted: Path) -> float | None:
         # TempDirectory __exit__ handles cleanup
 
 
-def _fit_crf(crf_scores: list[tuple[int, float]], target_vmaf: float) -> int:
+def _fit_crf(crf_scores: list[tuple[int, float]], target_vmaf: float) -> float:
     """Find the CRF value that achieves *target_vmaf*.
 
-    Fits a linear regression (VMAF \u2248 a \u00d7 CRF + b) through all measured
-    points, then solves for CRF.  Clamped to [0, 51].
-
-    VMAF and CRF have a roughly linear relationship in the useful range
-    (CRF 18-35, VMAF ~98-85), so a simple linear fit works well.
+    When scores bracket the target (one above, one below), linearly interpolates
+    between the two bracketing scores for a more precise recommendation.
+    Falls back to linear regression when no bracket exists.
+    Clamped to [0, 51].
     """
     if not crf_scores:
-        return 23
+        return 23.0
 
     crf_scores.sort(key=lambda x: x[0])
     n = len(crf_scores)
@@ -405,14 +404,31 @@ def _fit_crf(crf_scores: list[tuple[int, float]], target_vmaf: float) -> int:
     # All scores above target \u2192 use the highest tested CRF (smallest file)
     # since even the worst-quality tested CRF still meets the target quality.
     if all(vmaf >= target_vmaf for _, vmaf in crf_scores):
-        return crf_scores[-1][0]
+        return float(crf_scores[-1][0])
 
     # All scores below target \u2192 use the lowest CRF (best quality)
     # since even the best-quality tested CRF is below the target.
     if all(vmaf <= target_vmaf for _, vmaf in crf_scores):
-        return crf_scores[0][0]
+        return float(crf_scores[0][0])
 
-    # Simple linear regression: VMAF = a * CRF + b
+    # Find bracketing pair and linearly interpolate
+    for i in range(1, n):
+        crf_low, vmaf_low = crf_scores[i - 1]
+        crf_high, vmaf_high = crf_scores[i]
+
+        # Check if these two points bracket the target
+        if (vmaf_low >= target_vmaf >= vmaf_high) or (
+            vmaf_low <= target_vmaf <= vmaf_high
+        ):
+            if vmaf_high == vmaf_low:
+                result = float(crf_low)
+            else:
+                result = crf_low + (target_vmaf - vmaf_low) * (crf_high - crf_low) / (
+                    vmaf_high - vmaf_low
+                )
+            return max(0.0, min(51.0, result))
+
+    # Fallback: linear regression (shouldn't normally reach here)
     sum_x = sum(crf for crf, _ in crf_scores)
     sum_y = sum(vmaf for _, vmaf in crf_scores)
     sum_xy = sum(crf * vmaf for crf, vmaf in crf_scores)
@@ -420,30 +436,26 @@ def _fit_crf(crf_scores: list[tuple[int, float]], target_vmaf: float) -> int:
 
     denom = n * sum_xx - sum_x * sum_x
     if denom == 0:
-        return crf_scores[n // 2][0]
+        return float(crf_scores[n // 2][0])
 
     slope = (n * sum_xy - sum_x * sum_y) / denom
     intercept = (sum_y - slope * sum_x) / n
 
-    # Positive slope means VMAF increases with CRF (invalid measurement).
-    # Fall back to the median tested CRF.
     if slope >= 0:
         logger.warning(
             f"auto-CRF: unexpected positive slope ({slope:.4f}), using median"
         )
-        return crf_scores[n // 2][0]
+        return float(crf_scores[n // 2][0])
 
-    # Near-zero slope: all VMAF scores nearly identical across CRFs.
-    # The regression is unreliable \u2014 fall back to median.
     if abs(slope) < 0.01:
         logger.warning(
             f"auto-CRF: near-zero slope ({slope:.4f}), VMAF scores"
             f" barely change with CRF ({crf_scores}), using median"
         )
-        return crf_scores[n // 2][0]
+        return float(crf_scores[n // 2][0])
 
     predicted = (target_vmaf - intercept) / slope
-    return max(0, min(51, round(predicted)))
+    return max(0.0, min(51.0, predicted))
 
 
 def _probe_crf(
@@ -454,13 +466,14 @@ def _probe_crf(
     tmp: Path,
     preset: str = "medium",
     progress_callback: Callable[[str], None] | None = None,
-) -> tuple[list[float], float | None]:
+) -> tuple[list[float], float | None, int]:
     """Encode all *clip_paths* at *crf* and return per-clip VMAF scores + minimum.
 
-    Returns (clip_scores, min_score).  *min_score* is None if all encodes or
-    all VMAF computations failed.
+    Returns (clip_scores, min_score, total_encoded_bytes).
+    *min_score* is None if all encodes or all VMAF computations failed.
     """
     clip_scores: list[float] = []
+    total_encoded_bytes = 0
 
     for i, clip_path in enumerate(clip_paths):
         encoded = tmp / f"crf_{crf}_clip_{i}{clip_path.suffix}"
@@ -490,11 +503,15 @@ def _probe_crf(
         vmaf_score = _compute_vmaf_score(clip_path, encoded)
         if vmaf_score is not None:
             clip_scores.append(vmaf_score)
+            try:
+                total_encoded_bytes += encoded.stat().st_size
+            except OSError:
+                pass
 
     if not clip_scores:
-        return [], None
+        return [], None, 0
 
-    return clip_scores, min(clip_scores)
+    return clip_scores, min(clip_scores), total_encoded_bytes
 
 
 def determine_crf(
@@ -506,9 +523,10 @@ def determine_crf(
     console: Console | None = None,
     output_lines: list[str] | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    on_crf_probe: Callable[[int, float, int], None] | None = None,
     num_clips: int = _NUM_CLIPS,
     clip_duration: float = _CLIP_DURATION,
-) -> int:
+) -> float:
     """Determine the optimal CRF for a video using VMAF probing.
 
     Encodes short test clips (from multiple scenes via scene detection) at
@@ -528,9 +546,11 @@ def determine_crf(
         console: Optional Rich console for progress output.
         num_clips: Number of sample clips to extract (default 3).
         clip_duration: Duration of each sample clip in seconds (default 8).
+        on_crf_probe: Optional callback invoked after each successful CRF
+            probe with (crf, min_vmaf, total_encoded_bytes).
 
     Returns:
-        Optimal CRF integer (0-51).  Falls back to 23 on any failure.
+        Optimal CRF float (0-51).  Falls back to 23.0 on any failure.
     """
 
     def _out(msg: str) -> None:
@@ -551,8 +571,7 @@ def determine_crf(
         # Warn the user that scdet can take a while on long videos
         if _scdet_available() and probe.duration >= num_clips * clip_duration * 2:
             _out(
-                "  [dim]detecting scenes"
-                " (may take a few minutes for long videos)...[/]"
+                "  [dim]detecting scenes (may take a few minutes for long videos)...[/]"
             )
 
         start_times = _select_clips(
@@ -563,7 +582,7 @@ def determine_crf(
                 "  [yellow]warning:[/] could not determine any"
                 " suitable clip position, using CRF 23"
             )
-            return 23
+            return 23.0
 
         clip_paths: list[Path] = []
         for i, st in enumerate(start_times):
@@ -574,7 +593,7 @@ def determine_crf(
                     f" test clip {i}, using CRF 23"
                 )
                 logger.warning(f"auto-CRF: clip {i} extraction failed")
-                return 23
+                return 23.0
             clip_paths.append(clip_path)
 
         # --- Probe first clip for its properties ---
@@ -583,13 +602,13 @@ def determine_crf(
         seg_probe = _probe_file(clip_paths[0])
         if seg_probe is None:
             _out("  [yellow]warning:[/] could not probe test clip, using CRF 23")
-            return 23
+            return 23.0
 
         # --- Encode test clips at each candidate CRF ---
         crf_scores: list[tuple[int, float]] = []
 
         for crf in _CANDIDATE_CRFS:
-            clip_scores, min_vmaf = _probe_crf(
+            clip_scores, min_vmaf, encoded_bytes = _probe_crf(
                 crf,
                 clip_paths,
                 seg_probe,
@@ -603,6 +622,8 @@ def determine_crf(
                 continue
 
             crf_scores.append((crf, min_vmaf))
+            if on_crf_probe is not None:
+                on_crf_probe(crf, min_vmaf, encoded_bytes)
 
             clips_detail = ", ".join(f"{v:.1f}" for v in clip_scores)
             n_failed = len(clip_paths) - len(clip_scores)
@@ -642,7 +663,7 @@ def determine_crf(
         if not crf_scores:
             _out("  [yellow]warning:[/] no VMAF scores obtained, using CRF 23")
             logger.warning("auto-CRF: no VMAF scores obtained")
-            return 23
+            return 23.0
 
         # --- Lost cause: all scores below target, skip refinement ---
         if all(vmaf < target_vmaf for _, vmaf in crf_scores):
@@ -657,7 +678,7 @@ def determine_crf(
                 f"auto-crf: lost cause — returning best CRF {best[0]}"
                 f" (VMAF {best[1]:.1f} < target {target_vmaf})"
             )
-            return best[0]
+            return float(best[0])
 
         # --- Refinement: extend search when all scores are on one side ---
         crf_scores.sort(key=lambda x: x[0])
@@ -672,7 +693,7 @@ def determine_crf(
         }:
             if progress_callback:
                 progress_callback(f"refining at CRF {refinement_crf}...")
-            clip_scores, min_vmaf = _probe_crf(
+            clip_scores, min_vmaf, encoded_bytes = _probe_crf(
                 refinement_crf,
                 clip_paths,
                 seg_probe,
@@ -683,6 +704,8 @@ def determine_crf(
             )
             if min_vmaf is not None:
                 crf_scores.append((refinement_crf, min_vmaf))
+                if on_crf_probe is not None:
+                    on_crf_probe(refinement_crf, min_vmaf, encoded_bytes)
                 clips_detail = ", ".join(f"{v:.1f}" for v in clip_scores)
                 _out(
                     f"    testing CRF {refinement_crf}..."
@@ -705,3 +728,43 @@ def determine_crf(
             f" selected={optimal_crf}"
         )
         return optimal_crf
+
+
+def estimate_crf_size_ratio(
+    probe_data: list[tuple[int, int]],
+    from_crf: float,
+    to_crf: float,
+) -> float:
+    """Estimate the encoded size ratio between two CRF values.
+
+    Uses the empirical relationship between CRF and encoded clip sizes
+    from probe data (CRF \u2192 total encoded bytes).  Fits
+    log(size) \u2248 a \u00d7 CRF + b and returns the ratio
+    *size_at_to_crf* / *size_at_from_crf*.
+
+    A ratio < 1 means *to_crf* produces smaller files (higher CRF).
+    Returns 1.0 if insufficient probe data.
+    """
+    if len(probe_data) < 2:
+        return 1.0
+
+    probe_data_sorted = sorted(probe_data, key=lambda x: x[0])
+
+    # Compute per-step size ratio and average
+    import math
+
+    n = len(probe_data_sorted)
+    sum_x = sum(crf for crf, _ in probe_data_sorted)
+    sum_y = sum(math.log(max(s, 1)) for _, s in probe_data_sorted)
+    sum_xy = sum(crf * math.log(max(s, 1)) for crf, s in probe_data_sorted)
+    sum_xx = sum(crf * crf for crf, _ in probe_data_sorted)
+
+    denom = n * sum_xx - sum_x * sum_x
+    if denom == 0:
+        return 1.0
+
+    slope = (n * sum_xy - sum_x * sum_y) / denom
+
+    # slope is (d log(size) / d CRF). A negative slope means higher CRF = smaller.
+    # Ratio = exp(slope * (to_crf - from_crf))
+    return math.exp(slope * (to_crf - from_crf))
