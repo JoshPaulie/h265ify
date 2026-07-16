@@ -917,6 +917,10 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
         return
 
     # --- Run VMAF evaluation (sequential) ---
+    # On Unix, Ctrl+C (SIGINT) is delivered to the child ffmpeg process
+    # via the terminal's process group, so subprocess.run() children are
+    # killed automatically. No explicit process management is needed,
+    # unlike the old threaded model which required kill_all_vmaf_procs().
     from rich.progress import (
         Progress,
         SpinnerColumn,
