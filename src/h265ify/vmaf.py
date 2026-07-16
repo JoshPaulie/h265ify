@@ -503,6 +503,9 @@ def _probe_crf(
         vmaf_score = _compute_vmaf_score(clip_path, encoded)
         if vmaf_score is not None:
             clip_scores.append(vmaf_score)
+            # Only count bytes when VMAF succeeded: clips that encode but
+            # fail VMAF are excluded, keeping per-CRF size estimates
+            # proportional across CRF values despite uneven clip counts.
             try:
                 total_encoded_bytes += encoded.stat().st_size
             except OSError:
