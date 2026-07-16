@@ -12,7 +12,7 @@ def test_main_mutually_exclusive() -> None:
 
 def test_main_replace_mode() -> None:
     with patch("sys.argv", ["h265ify", "--replace", "--crf", "20", "test.mp4"]):
-        with patch("h265ify.find_replace_pairs", return_value=[]):
+        with patch("h265ify.commands.replace.find_replace_pairs", return_value=[]):
             with pytest.raises(SystemExit) as e:
                 main()
             assert e.value.code == 0
@@ -34,7 +34,7 @@ def test_main_invalid_resize() -> None:
 
 def test_main_encode_mode() -> None:
     with patch("sys.argv", ["h265ify", "test.mp4"]):
-        with patch("h265ify.find_video_files", return_value=[]):
+        with patch("h265ify.commands.encode.find_video_files", return_value=[]):
             with pytest.raises(SystemExit) as e:
                 main()
             assert e.value.code == 0

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from h265ify.__init__ import _append_ffmpeg_log, _dedup_consecutive
+from h265ify.commands.report import _append_ffmpeg_log, _dedup_consecutive
 
 
 def _make_log(tmp_path: Path, sessions: list[dict]) -> Path:
