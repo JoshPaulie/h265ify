@@ -617,6 +617,22 @@ def determine_crf(
             if progress_callback:
                 progress_callback(f"CRF {crf}")
 
+            # "Lost cause": if even the best-quality candidate can't
+            # hit the target, higher (worse) CRFs will only be worse.
+            if crf == _CANDIDATE_CRFS[0] and min_vmaf < target_vmaf:
+                _out(
+                    "  [yellow]note:[/] video doesn't reach VMAF"
+                    f" {target_vmaf} even at CRF {_CANDIDATE_CRFS[0]}"
+                    " (best candidate), stopping probe early"
+                )
+                logger.info(
+                    f"auto-crf: lost cause — CRF {_CANDIDATE_CRFS[0]}"
+                    f" VMAF {min_vmaf:.1f} < target {target_vmaf}"
+                )
+                if progress_callback:
+                    progress_callback("lost cause")
+                break
+
             # Early stop: once the *minimum* VMAF is below target we have
             # a bracket -- no need to probe higher (worse) CRFs.
             if min_vmaf < target_vmaf and len(crf_scores) >= 2:
@@ -627,6 +643,21 @@ def determine_crf(
             _out("  [yellow]warning:[/] no VMAF scores obtained, using CRF 23")
             logger.warning("auto-CRF: no VMAF scores obtained")
             return 23
+
+        # --- Lost cause: all scores below target, skip refinement ---
+        if all(vmaf < target_vmaf for _, vmaf in crf_scores):
+            # Even the best candidate couldn't reach target. No point
+            # probing even better CRFs — return the best we found.
+            best = min(crf_scores, key=lambda x: x[0])
+            _out(
+                f"  best achievable CRF [green]{best[0]}[/]"
+                f" (VMAF {best[1]:.1f} < target {target_vmaf})"
+            )
+            logger.info(
+                f"auto-crf: lost cause — returning best CRF {best[0]}"
+                f" (VMAF {best[1]:.1f} < target {target_vmaf})"
+            )
+            return best[0]
 
         # --- Refinement: extend search when all scores are on one side ---
         crf_scores.sort(key=lambda x: x[0])

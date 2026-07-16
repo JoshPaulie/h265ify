@@ -14,7 +14,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`--vmaf-clip-duration` flag** to control the duration of each VMAF sample
   clip in seconds (default: 8).
 
+### Added
+
+- **Lost cause early exit for `--vmaf`**: if even the best CRF candidate (18)
+  can't reach the target VMAF, the probe stops immediately instead of
+  testing worse-quality CRFs.
+- **Refinement skip for lost cause**: when all CRF scores are below the
+  target, the function returns the best CRF directly without probing CRF 13
+  (wasted refinement pass).
+
 ### Changed
+
+- The lost cause check now references `_CANDIDATE_CRFS[0]` instead of a
+  hardcoded `18`, making it robust to candidate list reordering.
+- Lost cause events are logged with VMAF details for debugging.
 
 - VMAF evaluation rewritten with multi-clip scene detection (via ffmpeg's
   `scdet` filter) instead of a single segment. Extracts N short clips from
