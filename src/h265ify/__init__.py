@@ -28,6 +28,7 @@ from .logger import (
 from .pipeline import (
     EncodeJob,
     EncodeResult,
+    check_disk_space,
     compute_display_names,
     find_replace_pairs,
     find_video_files,
@@ -244,6 +245,11 @@ examples:
         "-H",
         action="store_true",
         help="stop the entire batch if any file comes out larger than the original",
+    )
+    advanced.add_argument(
+        "--ignore-full-disk",
+        action="store_true",
+        help="skip the free-disk-space safety check before encoding",
     )
     parser.add_argument(
         "--version",
@@ -1192,6 +1198,16 @@ def _cmd_encode(args: argparse.Namespace, console: Console) -> None:
         else:
             console.print("nothing to do.")
         sys.exit(0)
+
+    # --- Disk space check ---
+    if not args.dry_run and not args.ignore_full_disk:
+        if not check_disk_space(
+            jobs,
+            yolo=args.yolo,
+            output_format=args.output_format,
+            console=console,
+        ):
+            sys.exit(1)
 
     # Compute display names (trim common prefix) for narrow terminals
     all_input_paths = [j.input_path for j in jobs] + [r.path for r in skipped]

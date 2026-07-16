@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Refinement skip for lost cause**: when all CRF scores are below the
   target, the function returns the best CRF directly without probing CRF 13
   (wasted refinement pass).
+- **Disk space safety check**: before encoding, h265ify now checks for
+  sufficient free disk space. Uses separate thresholds for normal mode
+  (fraction of total input) and ``--yolo`` mode (fraction of largest single
+  file). Pass ``--ignore-full-disk`` to bypass.
 
 ### Changed
 

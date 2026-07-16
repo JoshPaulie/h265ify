@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import os
+import shutil
 import signal
 import time
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from rich.progress import (
 from send2trash import send2trash
 
 from .encoder import build_command, fmt_eta, format_duration, format_size, run_encode
+
 from .hardware import Encoder
 from .logger import FFMPEG_LOG_FILE, logger
 from .probe import ProbeResult, ffprobe_available, probe
@@ -756,6 +758,96 @@ def run_replace(
             skipped += 1
 
     return replaced, skipped
+
+
+# ── Disk space check ──
+
+# Both thresholds are 0.5 but applied against different bases
+# (total_input vs max_file), kept separate for independent tuning.
+_DISK_CHECK_THRESHOLD_NORMAL: float = 0.5
+"""
+Fraction of total input size used as the free-space floor for normal mode.
+
+We assume typical h265 output is ~40-60% of the original.  Since originals
+are retained alongside outputs during review, we need enough free space to
+accommodate all outputs.  This threshold is conservative: 0.5 means "free
+space must be at least 50% of total input size" (i.e. we assume outputs
+will be at most 50% of inputs, which holds for most content).
+"""
+
+_DISK_CHECK_THRESHOLD_YOLO: float = 0.5
+"""
+Fraction of the *largest single file* used as the free-space floor for
+``--yolo`` mode.  Files are processed sequentially and the original is
+deleted after encoding, so we only need headroom for one temp file at a
+time.  0.5 is conservative: temp file ≈ output ≈ 50% of the original.
+"""
+
+
+def check_disk_space(
+    jobs: list[EncodeJob],
+    *,
+    yolo: bool = False,
+    output_format: str | None = None,
+    console: Console,
+) -> bool:
+    """Check if there's enough free disk space for the encoding session.
+
+    Examines the filesystem where the first output file would be written.
+    All outputs from a single session are assumed to be on the same
+    filesystem (current behaviour: same directory as inputs).
+
+    Returns ``True`` if:
+
+    * No jobs to check.
+    * Free space is above the applicable threshold.
+    * Can't determine free space (unlikely, don't block).
+
+    Returns ``False`` if space is clearly insufficient, after printing an
+    error message with the advisory threshold and a pointer to
+    ``--ignore-full-disk``.
+    """
+    if not jobs:
+        return True
+
+    # Determine the output directory for the first job.
+    first_out = get_output_path(jobs[0].input_path, replace=yolo, output_format=output_format)
+    parent = first_out.parent
+
+    try:
+        usage = shutil.disk_usage(parent)
+    except OSError:
+        logger.warning("could not determine disk usage for %s, skipping check", parent)
+        return True
+
+    free = usage.free
+
+    total_input = sum(j.probe_result.file_size for j in jobs)
+    max_file = max(j.probe_result.file_size for j in jobs)
+
+    if yolo:
+        # In --yolo mode each file's original is deleted right after
+        # encoding, so we only need room for one temp file at a time.
+        needed = int(max_file * _DISK_CHECK_THRESHOLD_YOLO)
+        mode_desc = "in-place replacement (--yolo)"
+    else:
+        # Normal mode: originals + outputs coexist during review.
+        # We need enough free space to accommodate all outputs.
+        needed = int(total_input * _DISK_CHECK_THRESHOLD_NORMAL)
+        mode_desc = "normal mode (originals kept)"
+
+    if free < needed:
+        console.print()
+        console.print(
+            f"[red]error:[/] not enough free disk space for {mode_desc}.\n"
+            f"  free:       [bold]{format_size(free)}[/]\n"
+            f"  estimated:  {format_size(needed)} (based on {len(jobs)} file(s), "
+            f"{format_size(total_input)} total)\n"
+            f"  Use [bold]--ignore-full-disk[/] to bypass this check."
+        )
+        return False
+
+    return True
 
 
 def print_summary(
