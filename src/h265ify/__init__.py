@@ -38,7 +38,13 @@ from .pipeline import (
     run_pipeline,
     run_replace,
 )
-from .vmaf import _CLIP_DURATION, _NUM_CLIPS, determine_crf, vmaf_available
+from .vmaf import (
+    _CLIP_DURATION,
+    _NUM_CLIPS,
+    determine_crf,
+    estimate_crf_size_ratio,
+    vmaf_available,
+)
 
 
 def _positive_int_ge(value: str, minimum: int = 1) -> int:
@@ -911,8 +917,11 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
         TextColumn,
     )
 
+    import math as _math
+
     n_probe = len(to_evaluate)
-    results: dict[Path, int] = {}
+    results: dict[Path, float] = {}
+    probe_data: dict[Path, list[tuple[int, int]]] = {}
 
     with Progress(
         SpinnerColumn(),
@@ -938,6 +947,15 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
                 )
 
                 lines: list[str] = []
+
+                # Collector for probe encoded sizes for this file
+                _this_probe_data: list[tuple[int, int]] = []
+
+                def _on_crf_probe(
+                    crf: int, min_vmaf: float, encoded_bytes: int
+                ) -> None:
+                    _this_probe_data.append((crf, encoded_bytes))
+
                 crf = determine_crf(
                     pr.path,
                     pr,
@@ -946,11 +964,14 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
                     preset=args.preset,
                     output_lines=lines,
                     progress_callback=_probe_done,
+                    on_crf_probe=_on_crf_probe,
                     num_clips=args.vmaf_clips,
                     clip_duration=args.vmaf_clip_duration,
                 )
                 results[pr.path] = crf
-                logger.info(f"vmaf-eval: {pr.path.name} -> CRF {crf}")
+                if _this_probe_data:
+                    probe_data[pr.path] = _this_probe_data
+                logger.info(f"vmaf-eval: {pr.path.name} -> CRF {crf:.1f}")
 
                 progress.update(
                     task,
@@ -970,16 +991,26 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
                 console.print("  [yellow]interrupted[/]")
 
     # --- Summary ---
+    # --- Summary ---
     if interrupted or not results:
         if results:
             console.print()
             for pr in to_evaluate:
                 if pr.path in results:
                     crf_val = results[pr.path]
-                    console.print(
-                        f"  [green]{vmaf_display.get(pr.path, pr.path.name)}[/]"
-                        f" \u2192 CRF [bold]{crf_val}[/]"
-                    )
+                    crf_int = int(_math.floor(crf_val))
+                    if crf_val == float(crf_int):
+                        display = (
+                            f"  [green]{vmaf_display.get(pr.path, pr.path.name)}[/]"
+                            f" \u2192 CRF [bold]{crf_int}[/]"
+                        )
+                    else:
+                        display = (
+                            f"  [green]{vmaf_display.get(pr.path, pr.path.name)}[/]"
+                            f" \u2192 CRF [bold]{crf_int}[/]"
+                            f"  [dim](from {crf_val:.1f})[/]"
+                        )
+                    console.print(display)
             console.print()
             console.print("  [yellow]VMAF evaluation incomplete (partial results)[/]")
         else:
@@ -992,17 +1023,80 @@ def _cmd_vmaf(args: argparse.Namespace, console: Console) -> None:
     min_crf, max_crf = min(crf_values), max(crf_values)
     console.print()
     console.print("[bold]VMAF evaluation complete.[/]")
-    if min_crf == max_crf:
-        console.print(f"  all files: CRF [bold]{min_crf}[/]")
+
+    # Safe batch CRF (most conservative across all files)
+    if len(crf_values) >= 2:
+        safe_crf = _math.floor(min(crf_values))
+        safe_val = int(safe_crf)
+        if min_crf == max_crf:
+            console.print(f"  all files: CRF [bold]{min_crf:.1f}[/]")
+        else:
+            console.print(f"  CRF range: {min_crf:.1f} \u2013 {max_crf:.1f}")
+        console.print(
+            f"  safe batch CRF: [bold]{safe_val}[/]"
+            f" (most conservative across {len(crf_values)} files)"
+        )
+
+        # Projected savings between safe CRF and safe_crf + 1
+        all_ratios: list[float] = []
+        for pr in to_evaluate:
+            if pr.path in probe_data:
+                ratio = estimate_crf_size_ratio(
+                    probe_data[pr.path],
+                    from_crf=float(safe_val),
+                    to_crf=float(safe_val + 1),
+                )
+                if ratio < 1.0:
+                    all_ratios.append(ratio)
+        if all_ratios:
+            avg_ratio = sum(all_ratios) / len(all_ratios)
+            savings_pct = (1 - avg_ratio) * 100
+            min_savings = (1 - max(all_ratios)) * 100
+            max_savings = (1 - min(all_ratios)) * 100
+            if min_savings == max_savings:
+                console.print(
+                    f"  vs CRF {safe_val + 1}: projected [green]~{savings_pct:.0f}%[/] smaller"
+                )
+            else:
+                console.print(
+                    f"  vs CRF {safe_val + 1}: projected [green]~{savings_pct:.0f}%[/] smaller"
+                    f" (range: {min_savings:.0f}\u2013{max_savings:.0f}% across files)"
+                )
+        else:
+            # Fallback: rule of thumb (~12% per CRF step)
+            console.print(
+                "  vs CRF {}: projected ~12% smaller (rule of thumb)".format(
+                    safe_val + 1
+                )
+            )
     else:
-        console.print(f"  CRF range: {min_crf} \u2013 {max_crf}")
+        # Single file
+        single_crf = crf_values[0]
+        safe_int = int(_math.floor(single_crf))
+        if single_crf == float(safe_int):
+            console.print(f"  CRF [bold]{safe_int}[/]")
+        else:
+            console.print(f"  CRF [bold]{safe_int}[/]  [dim](from {single_crf:.1f})[/]")
+
     console.print()
     for pr in to_evaluate:
         crf = results[pr.path]
-        console.print(
-            f"  [green]{vmaf_display.get(pr.path, pr.path.name)}[/]"
-            f" \u2192 CRF [bold]{crf}[/]"
-        )
+        crf_int = int(_math.floor(crf))
+        safe_note = ""
+        if len(crf_values) >= 2:
+            if crf_int < safe_val:
+                safe_note = f" [dim](more conservative than batch CRF {safe_val})[/]"
+            elif crf_int > safe_val:
+                safe_note = f" [dim](less conservative than batch CRF {safe_val})[/]"
+        if crf == float(crf_int):
+            display = f"  [green]{vmaf_display.get(pr.path, pr.path.name)}[/]"
+            display += f" \u2192 CRF [bold]{crf_int}[/]{safe_note}"
+        else:
+            display = f"  [green]{vmaf_display.get(pr.path, pr.path.name)}[/]"
+            display += (
+                f" \u2192 CRF [bold]{crf_int}[/]  [dim](from {crf:.1f})[/]{safe_note}"
+            )
+        console.print(display)
     console.print()
     console.print("  [dim]Use --crf <N> to encode with your chosen value.[/]")
 
