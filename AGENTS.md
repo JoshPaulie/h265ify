@@ -16,14 +16,22 @@ Zero-fuss h265/HEVC video re-encoder wrapper for ffmpeg. CLI tool `h265ify` re-e
 
 ```
 src/h265ify/
-  __init__.py     entry point, argparse CLI, main()
-  encoder.py      ffmpeg command builder, subprocess runner, size/duration formatting
-  hardware.py     hardware encoder detection (VT/NVENC/QSV/AMF → libx265 fallback)
-  logger.py       persistent file logging (app events + ffmpeg stderr)
-  pipeline.py     file discovery, job preparation, sequential encoding, summary
-  probe.py        ffprobe wrapper, codec/HDR/stream metadata extraction
+  __init__.py         entry point, argparse CLI, main()
+  encoder.py          ffmpeg command builder, subprocess runner, size/duration formatting
+  hardware.py         hardware encoder detection (VT/NVENC/QSV/AMF → libx265 fallback)
+  logger.py           persistent file logging (app events + ffmpeg stderr)
+  pipeline.py         file discovery, job preparation, sequential encoding, summary
+  probe.py            ffprobe wrapper, codec/HDR/stream metadata extraction
+  vmaf.py             VMAF-based auto-CRF computation (no encoding)
+  commands/
+    __init__.py       re-exports all command modules
+    shared.py         shared argparse validators
+    encode.py         --encode (default) subcommand implementation
+    replace.py        --replace subcommand implementation
+    vmaf.py           --vmaf subcommand implementation
+    report.py         --report subcommand implementation
 pyproject.toml
-justfile         aliases: check, format, lint, mypy
+justfile              aliases: check, format, lint, mypy
 ```
 
 ## Conventions
