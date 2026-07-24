@@ -21,6 +21,7 @@ from pathlib import Path
 
 from rich.console import Console
 
+from .encoder import _VALID_COLOR_PRIMARIES, _VALID_COLOR_SPACES, _VALID_COLOR_TRANSFERS
 from .hardware import Encoder, encoder_quality_flags, pix_fmt_for_encoder
 from .logger import logger
 from .probe import ProbeResult
@@ -316,6 +317,21 @@ def _build_probe_command(
     pix_fmt = pix_fmt_for_encoder(encoder.name, probe.color.bit_depth)
     if pix_fmt is not None:
         cmd.extend(["-pix_fmt", pix_fmt])
+
+    # Color metadata passthrough (validated to avoid encoder rejections).
+    # Matches the real encode so VMAF scores reflect actual encode quality.
+    if (
+        probe.color.color_primaries
+        and probe.color.color_primaries in _VALID_COLOR_PRIMARIES
+    ):
+        cmd.extend(["-color_primaries", probe.color.color_primaries])
+    if (
+        probe.color.color_transfer
+        and probe.color.color_transfer in _VALID_COLOR_TRANSFERS
+    ):
+        cmd.extend(["-color_trc", probe.color.color_transfer])
+    if probe.color.color_space and probe.color.color_space in _VALID_COLOR_SPACES:
+        cmd.extend(["-colorspace", probe.color.color_space])
 
     cmd.extend(["-an", "-sn"])  # no audio, no subtitles
     cmd.append(str(output_path))

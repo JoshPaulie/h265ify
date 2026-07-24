@@ -11,6 +11,7 @@ from unittest.mock import patch
 from h265ify.hardware import Encoder
 from h265ify.probe import ColorInfo, ProbeResult
 from h265ify.vmaf import (
+    _build_probe_command,
     _evenly_spaced_clips,
     _extract_clip,
     _fit_crf,
@@ -707,3 +708,79 @@ class TestEstimateCrfSizeRatio:
         """from_crf == to_crf \u2192 exp(0) \u2192 1.0."""
         ratio = estimate_crf_size_ratio([(18, 2000), (28, 1000)], 28, 28)
         assert ratio == pytest.approx(1.0, abs=0.01)
+
+
+# ── _build_probe_command ──────────────────────────────────────────────
+
+
+def _hdr_probe(**overrides: object) -> ProbeResult:
+    kwargs: dict[str, object] = {
+        "color_primaries": "bt2020",
+        "color_transfer": "smpte2084",
+        "color_space": "bt2020nc",
+    }
+    kwargs.update(overrides)
+    return ProbeResult(
+        path=Path("test.mkv"),
+        is_h265=False,
+        video_codec="h264",
+        width=1920,
+        height=1080,
+        duration=120.0,
+        file_size=1_000_000,
+        color=ColorInfo(
+            bit_depth=10,
+            color_primaries=str(kwargs["color_primaries"]),
+            color_transfer=str(kwargs["color_transfer"]),
+            color_space=str(kwargs["color_space"]),
+            is_hdr=True,
+        ),
+    )
+
+
+class TestBuildProbeCommand:
+    def test_hdr_color_metadata_passthrough(self) -> None:
+        """Probe encodes for HDR content include validated color metadata."""
+        cmd = _build_probe_command(
+            Path("test.mkv"),
+            Path("out.mkv"),
+            _hdr_probe(),
+            Encoder(name="libx265", is_hardware=False, label="CPU (libx265)"),
+            crf=23,
+        )
+        assert "-color_primaries" in cmd
+        assert cmd[cmd.index("-color_primaries") + 1] == "bt2020"
+        assert "-color_trc" in cmd
+        assert cmd[cmd.index("-color_trc") + 1] == "smpte2084"
+        assert "-colorspace" in cmd
+        assert cmd[cmd.index("-colorspace") + 1] == "bt2020nc"
+
+    def test_sdr_no_color_flags(self) -> None:
+        """SDR content with no color metadata produces no color flags."""
+        cmd = _build_probe_command(
+            Path("test.mp4"),
+            Path("out.mkv"),
+            _sample_probe(),
+            Encoder(name="libx265", is_hardware=False, label="CPU (libx265)"),
+            crf=23,
+        )
+        assert "-color_primaries" not in cmd
+        assert "-color_trc" not in cmd
+        assert "-colorspace" not in cmd
+
+    def test_invalid_color_values_excluded(self) -> None:
+        """Color metadata values not in the validated allowlists are excluded."""
+        cmd = _build_probe_command(
+            Path("test.mkv"),
+            Path("out.mkv"),
+            _hdr_probe(
+                color_primaries="nonexistent",
+                color_transfer="bogus",
+                color_space="invalid",
+            ),
+            Encoder(name="libx265", is_hardware=False, label="CPU (libx265)"),
+            crf=23,
+        )
+        assert "-color_primaries" not in cmd
+        assert "-color_trc" not in cmd
+        assert "-colorspace" not in cmd
