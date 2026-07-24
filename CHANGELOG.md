@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-07-24
+
+### Fixed
+
+- **VMAF probe on non-MP4/MKV/MOV sources** (e.g. AVI): probe encodes now
+  always use an MKV container instead of inheriting the source file's
+  extension. Writing HEVC into an AVI container is non-standard, causing
+  ffmpeg to fail with rawvideo decoder errors when reading the encoded clip
+  back for VMAF comparison. This made `--vmaf` fall back to CRF 23 for all
+  AVI, WebM, WMV, FLV, and other non-MP4/MKV/MOV source formats.
+
 ## [0.8.0] - 2026-07-16
 
 ### Added
@@ -220,6 +231,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rich-based colorful console output with per-file results and final summary.
 - Sequential encoding (one file at a time) to avoid splitting hardware encoder throughput.
 
+[0.8.1]: https://github.com/JoshPaulie/h265ify/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/JoshPaulie/h265ify/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/JoshPaulie/h265ify/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/JoshPaulie/h265ify/compare/v0.5.0...v0.6.0
