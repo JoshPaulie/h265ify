@@ -16,3 +16,9 @@ test_videos*/
 *.mov
 *.avi
 *.webm
+
+# Concern docs (session scratch, not for commits)
+CONCERN_*.md
+
+# Debug reports
+debug_reports/
