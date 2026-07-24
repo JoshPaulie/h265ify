@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **HDR color metadata in VMAF probe encodes**: `--vmaf` probe encodes now
+  pass validated `-color_primaries`, `-color_trc`, and `-colorspace` flags,
+  matching the real encode's color metadata behavior. Previously, probe
+  encodes omitted these flags, which could skew VMAF scores and produce
+  inaccurate CRF recommendations for HDR10/HLG content.
+
 ## [0.8.1] - 2026-07-24
 
 ### Fixed
