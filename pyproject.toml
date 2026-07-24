@@ -1,6 +1,6 @@
 [project]
 name = "h265ify"
-version = "0.8.1"
+version = "0.8.2"
 description = "Zero-fuss h265/HEVC video re-encoder wrapper for ffmpeg"
 readme = "README.md"
 authors = [

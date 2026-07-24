@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-07-24
+
 ### Fixed
 
 - **HDR color metadata in VMAF probe encodes**: `--vmaf` probe encodes now
@@ -239,6 +241,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rich-based colorful console output with per-file results and final summary.
 - Sequential encoding (one file at a time) to avoid splitting hardware encoder throughput.
 
+[0.8.2]: https://github.com/JoshPaulie/h265ify/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/JoshPaulie/h265ify/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/JoshPaulie/h265ify/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/JoshPaulie/h265ify/compare/v0.6.0...v0.7.0
