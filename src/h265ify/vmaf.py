@@ -476,7 +476,10 @@ def _probe_crf(
     total_encoded_bytes = 0
 
     for i, clip_path in enumerate(clip_paths):
-        encoded = tmp / f"crf_{crf}_clip_{i}{clip_path.suffix}"
+        # Always use .mkv for probe encodes — the source container may not
+        # support HEVC (e.g. AVI), and ffmpeg needs a valid container to
+        # read the encoded clip back for VMAF comparison.
+        encoded = tmp / f"crf_{crf}_clip_{i}.mkv"
 
         if progress_callback:
             progress_callback(
